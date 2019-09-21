@@ -2,6 +2,9 @@
 
 #[macro_use]
 extern crate lazy_static;
+#[macro_use]
+extern crate log;
+extern crate libc;
 
 use std::alloc::{GlobalAlloc, Layout, alloc};
 use std::ptr::null_mut;
@@ -17,17 +20,12 @@ pub type Void = libc::c_void;
 pub const NULL: usize = 0;
 pub const NULL_PTR: *mut c_void = NULL as *mut c_void;
 
-lazy_static! {
-    static ref BIBOP_HEAP: bibop_heap::Heap = bibop_heap::Heap::new();
-    static ref LARGE_HEAP: large_heap::Heap = large_heap::Heap::new();
-}
-
 pub unsafe fn nu_malloc(size: Size) -> Ptr {
-    unimplemented!()
+    generic_heap::malloc(size)
 }
 
 pub unsafe fn nu_free(ptr: Ptr) {
-    unimplemented!()
+    generic_heap::free(ptr)
 }
 
 pub unsafe fn nu_calloc(nmemb: Size, size: Size) -> Ptr {
@@ -39,8 +37,8 @@ pub unsafe fn nu_calloc(nmemb: Size, size: Size) -> Ptr {
     ptr
 }
 
-pub fn nu_realloc(ptr: Ptr, size: Size) -> Ptr {
-    unimplemented!()
+pub unsafe fn nu_realloc(ptr: Ptr, size: Size) -> Ptr {
+    generic_heap::realloc(ptr, size)
 }
 
 // Allocator for rust itself for internal heaps
