@@ -13,6 +13,7 @@ use libc::*;
 mod generic_heap;
 mod bibop_heap;
 mod large_heap;
+mod chashmap;
 
 pub type Ptr = *mut c_void;
 pub type Size = usize;

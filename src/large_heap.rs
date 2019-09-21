@@ -2,7 +2,7 @@ use super::*;
 use crate::generic_heap::ObjectMeta;
 
 pub struct Heap {
-
+    meta: chashmap::CHashMap<usize, ObjectMeta>
 }
 
 impl Heap {

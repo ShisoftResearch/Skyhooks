@@ -1,7 +1,7 @@
 use super::*;
 use std::thread::ThreadId;
 
-static LARGE_BOUND: usize = 1024 * 1024;
+static LARGE_OBJ_THRESHOLD: usize = 1024 * 1024;
 
 lazy_static! {
     static ref BIBOP_HEAP: bibop_heap::Heap = bibop_heap::Heap::new();
@@ -10,13 +10,14 @@ lazy_static! {
 
 pub struct ObjectMeta {
     size: usize,
-    addr: Ptr,
+    addr: usize,
+    numa: usize,
+    tier: usize,
     tid: ThreadId,
-    numa: usize
 }
 
 pub unsafe fn malloc(size: Size) -> Ptr {
-    if size >= LARGE_BOUND {
+    if size >= LARGE_OBJ_THRESHOLD {
         LARGE_HEAP.allocate(size)
     } else {
         BIBOP_HEAP.allocate(size)
