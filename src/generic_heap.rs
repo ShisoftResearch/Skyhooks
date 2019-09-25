@@ -8,6 +8,7 @@ lazy_static! {
     static ref LARGE_HEAP: large_heap::Heap = large_heap::Heap::new();
 }
 
+#[derive(Copy, Clone)]
 pub struct ObjectMeta {
     size: usize,
     addr: usize,
@@ -38,10 +39,10 @@ pub unsafe fn realloc(ptr: Ptr, size: Size) -> Ptr {
         free(ptr);
         return NULL_PTR;
     }
-    let old_size = if let Some(meta) = BIBOP_HEAP.meta_of(ptr) {
-        meta.size
-    } else if let Some(meta) = LARGE_HEAP.meta_of(ptr) {
-        meta.size
+    let old_size = if let Some(size) = BIBOP_HEAP.size_of(ptr) {
+        size
+    } else if let Some(meta) = LARGE_HEAP.size_of(ptr) {
+        size
     } else {
         warn!("Cannot determinate old object");
         return NULL_PTR;

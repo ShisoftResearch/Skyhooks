@@ -21,4 +21,7 @@ impl Heap {
     pub fn meta_of(&self, ptr: Ptr) -> Option<ObjectMeta> {
         unimplemented!()
     }
+    pub fn size_of(&self, ptr: Ptr) -> Option<usize> {
+        unimplemented!()
+    }
 }

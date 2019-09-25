@@ -14,6 +14,8 @@ mod generic_heap;
 mod bibop_heap;
 mod large_heap;
 mod chashmap;
+mod mmap;
+mod utils;
 
 pub type Ptr = *mut c_void;
 pub type Size = usize;

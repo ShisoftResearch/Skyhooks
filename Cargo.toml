@@ -8,7 +8,7 @@ edition = "2018"
 
 [dependencies]
 libc = "*"
-parking_lot = {version = "0.8", features = ["nightly"]}
+parking_lot = {version = "0.7", features = ["nightly"]}
 lazy_static = "*"
 owning_ref = "0.4"
 log = "0.4"
