@@ -9,3 +9,7 @@ pub fn align_padding(len: usize, align: usize) -> usize {
         & !align.wrapping_sub(1);
     len_rounded_up.wrapping_sub(len)
 }
+
+pub fn current_thread_id() -> usize {
+    unsafe { libc::pthread_self() as usize }
+}

@@ -1,19 +1,17 @@
 #![feature(alloc_layout_extra)]
-
+#![no_std]
+extern crate alloc;
 #[macro_use]
 extern crate lazy_static;
 #[macro_use]
 extern crate log;
 extern crate libc;
 
-use std::alloc::{GlobalAlloc, Layout, alloc};
-use std::ptr::null_mut;
 use libc::*;
 
 mod generic_heap;
 mod bibop_heap;
 mod large_heap;
-mod chashmap;
 mod mmap;
 mod utils;
 
@@ -59,8 +57,9 @@ unsafe impl GlobalAlloc for SelfAllocator {
     }
 }
 
-use std::alloc::System;
+use core::alloc::{GlobalAlloc, Layout};
+
 #[global_allocator]
-// static INTERNAL_ALLOCATOR: SelfAllocator = SelfAllocator;
-static INTERNAL_ALLOCATOR: System = System;
+static INTERNAL_ALLOCATOR: SelfAllocator = SelfAllocator;
+// static INTERNAL_ALLOCATOR: System = System;
 

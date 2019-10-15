@@ -1,5 +1,4 @@
 use super::*;
-use std::thread::ThreadId;
 
 static LARGE_OBJ_THRESHOLD: usize = 1024 * 1024;
 
@@ -14,7 +13,7 @@ pub struct ObjectMeta {
     addr: usize,
     numa: usize,
     tier: usize,
-    tid: ThreadId,
+    tid: usize,
 }
 
 pub unsafe fn malloc(size: Size) -> Ptr {

@@ -1,6 +1,6 @@
 use super::*;
 use libc::*;
-use std::ptr;
+use core::ptr;
 
 pub unsafe fn mmap_without_fd(size: usize) -> Ptr {
     mmap(
