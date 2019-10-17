@@ -12,6 +12,7 @@ use libc::*;
 mod generic_heap;
 mod bibop_heap;
 mod large_heap;
+mod bump_heap;
 mod mmap;
 mod hashmap;
 mod utils;
@@ -63,6 +64,5 @@ use core::alloc::{GlobalAlloc, Layout};
 use alloc::vec::Vec;
 
 #[global_allocator]
-static INTERNAL_ALLOCATOR: SelfAllocator = SelfAllocator;
-// static INTERNAL_ALLOCATOR: System = System;
+static INTERNAL_ALLOCATOR: bump_heap::BumpAllocator = bump_heap::BumpAllocator;
 
