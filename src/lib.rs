@@ -1,4 +1,4 @@
-#![feature(alloc_layout_extra)]
+#![cfg(feature="spin_no_std")] // for lazy_static
 #![no_std]
 extern crate alloc;
 #[macro_use]
@@ -9,10 +9,10 @@ extern crate libc;
 
 use libc::*;
 
+pub mod bump_heap;
 mod generic_heap;
 mod bibop_heap;
 mod large_heap;
-mod bump_heap;
 mod mmap;
 mod hashmap;
 mod utils;

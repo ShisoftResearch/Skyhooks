@@ -56,6 +56,7 @@ impl AllocatorInner {
 unsafe impl GlobalAlloc for AllocatorInner {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let actual_size = actual_size(&layout);
+        debug!("Allocate {}", actual_size);
         loop {
             let mut current_tail = self.tail.load(Ordering::Relaxed);
             let mut new_tail = current_tail + actual_size;
@@ -84,7 +85,8 @@ unsafe impl GlobalAlloc for AllocatorInner {
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        // use system call to invalidate underlying physical memory
+        // use system call to invalidate underlying physical memory (pages)
+        debug!("Dealloc {}", ptr as usize);
         dealloc_regional(ptr as Ptr, actual_size(&layout));
     }
 }
@@ -98,5 +100,27 @@ unsafe impl GlobalAlloc for BumpAllocator {
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         ALLOC_INNER.dealloc(ptr, layout)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::bump_heap::{AllocatorInner, BumpAllocator};
+    use alloc::vec::Vec;
+
+    #[global_allocator]
+    static INTERNAL_ALLOCATOR: BumpAllocator = BumpAllocator;
+
+    #[test]
+    pub fn general() {
+        env_logger::init();
+        let a = AllocatorInner::new();
+        let mut vec = Vec::with_capacity(1);
+        for i in 0..1000 {
+            vec.push(i);
+        }
+        for i in 0..1000 {
+            assert_eq!(vec[i], i);
+        }
     }
 }
