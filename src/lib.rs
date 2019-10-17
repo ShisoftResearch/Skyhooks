@@ -13,6 +13,7 @@ mod generic_heap;
 mod bibop_heap;
 mod large_heap;
 mod mmap;
+mod hashmap;
 mod utils;
 
 pub type Ptr = *mut c_void;
@@ -55,9 +56,11 @@ unsafe impl GlobalAlloc for SelfAllocator {
     unsafe fn dealloc(&self, ptr: *mut u8, _layout: Layout) {
         nu_free(ptr as Ptr)
     }
+
 }
 
 use core::alloc::{GlobalAlloc, Layout};
+use alloc::vec::Vec;
 
 #[global_allocator]
 static INTERNAL_ALLOCATOR: SelfAllocator = SelfAllocator;
