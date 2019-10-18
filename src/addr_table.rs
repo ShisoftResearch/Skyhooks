@@ -57,11 +57,11 @@ impl Table {
         loop {
             let mut val = self.get_from_chunk(base);
             match val {
+                Some(Value::PRIME(val)) | Some(Value::VAL(val)) => return Some(val),
+                None => return None,
                 Some(Value::SENTINEL(addr)) => {
                     base = addr;
                 }
-                Some(Value::PRIME(val)) | Some(Value::VAL(val)) => return Some(val),
-                None => return None
             }
         }
     }
