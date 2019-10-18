@@ -14,7 +14,7 @@ mod generic_heap;
 mod bibop_heap;
 mod large_heap;
 mod mmap;
-mod hashmap;
+mod addr_table;
 mod utils;
 
 pub type Ptr = *mut c_void;
