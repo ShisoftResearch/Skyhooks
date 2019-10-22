@@ -2,15 +2,14 @@
 name = "nulloc"
 version = "0.1.0"
 authors = ["Hao Shi <shisoftgenius@gmail.com>"]
-edition = "2018"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 libc = "*"
 lazy_static = "*"
-owning_ref = "0.4"
-log = "0.4"
+log = "*"
+lfmap = { git = "https://github.com/shisoft/lfmap.rs", branch = "develop" }
 
 [lib]
 name = "nulloc"

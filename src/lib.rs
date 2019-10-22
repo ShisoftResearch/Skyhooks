@@ -1,5 +1,5 @@
-#![cfg(feature="spin_no_std")] // for lazy_static
 #![no_std]
+#![cfg(feature="spin_no_std")] // for lazy_static
 extern crate alloc;
 #[macro_use]
 extern crate lazy_static;
@@ -14,7 +14,6 @@ mod generic_heap;
 mod bibop_heap;
 mod large_heap;
 mod mmap;
-mod addr_table;
 mod utils;
 
 pub type Ptr = *mut c_void;
