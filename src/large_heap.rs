@@ -34,7 +34,6 @@ impl Heap {
         } else {
             false
         }
-        unimplemented!()
     }
     pub fn meta_of(&self, ptr: Ptr) -> Option<ObjectMeta> {
         self.meta.get(ptr as usize)
