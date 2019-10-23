@@ -6,6 +6,7 @@ extern crate lazy_static;
 #[macro_use]
 extern crate log;
 extern crate libc;
+extern crate lfmap;
 
 use libc::*;
 

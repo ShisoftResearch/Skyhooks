@@ -1,4 +1,5 @@
 use super::*;
+use utils::current_thread_id;
 
 static LARGE_OBJ_THRESHOLD: usize = 1024 * 1024;
 
@@ -9,11 +10,11 @@ lazy_static! {
 
 #[derive(Copy, Clone)]
 pub struct ObjectMeta {
-    size: usize,
-    addr: usize,
-    numa: usize,
-    tier: usize,
-    tid: usize,
+    pub size: usize,
+    pub addr: usize,
+    pub numa: usize,
+    pub tier: usize,
+    pub tid: usize,
 }
 
 pub unsafe fn malloc(size: Size) -> Ptr {
@@ -54,4 +55,16 @@ pub unsafe fn realloc(ptr: Ptr, size: Size) -> Ptr {
     memcpy(new_ptr, ptr, old_size);
     free(ptr);
     new_ptr
+}
+
+impl ObjectMeta {
+    pub fn new(ptr: usize, size: usize) -> Self {
+        Self {
+            size,
+            addr: ptr,
+            numa: 0,
+            tier: 0,
+            tid: current_thread_id()
+        }
+    }
 }
