@@ -1,4 +1,5 @@
 use super::*;
+use libc::*;
 use utils::current_thread_id;
 
 static LARGE_OBJ_THRESHOLD: usize = 1024 * 1024;

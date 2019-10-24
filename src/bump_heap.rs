@@ -10,8 +10,9 @@
 use crate::Ptr;
 use crate::mmap::{mmap_without_fd, munmap_memory, dealloc_regional};
 use core::alloc::{GlobalAlloc, Layout};
-use parking_lot::Mutex;
 use core::sync::atomic::{Ordering, AtomicUsize};
+use core::sync::atomic::Ordering::Relaxed;
+use alloc::vec::Vec;
 
 lazy_static! {
     static ref ALLOC_INNER: AllocatorInner = AllocatorInner::new();
@@ -19,8 +20,7 @@ lazy_static! {
 
 pub struct AllocatorInner {
     tail: AtomicUsize,
-    addr: AtomicUsize,
-    bound: usize
+    addr: AtomicUsize
 }
 
 const HEAP_VIRT_SIZE: usize = 2 * 1024 * 1024 * 1024; // 2GB
@@ -45,10 +45,13 @@ fn dealloc_address_space(address: Ptr) {
 impl AllocatorInner {
     pub fn new() -> Self {
         let addr = allocate_address_space();
+        unsafe {
+            let mut val = *(addr as *mut usize);
+            val = 1;
+        }
         Self {
             addr: AtomicUsize::new(addr as usize),
-            tail: AtomicUsize::new(addr as usize),
-            bound: addr as usize + HEAP_VIRT_SIZE
+            tail: AtomicUsize::new(addr as usize)
         }
     }
 }
@@ -58,14 +61,14 @@ unsafe impl GlobalAlloc for AllocatorInner {
         let actual_size = actual_size(&layout);
         debug!("Allocate {}", actual_size);
         loop {
-            let mut current_tail = self.tail.load(Ordering::Relaxed);
-            let mut new_tail = current_tail + actual_size;
-            if new_tail >= self.bound {
+            let addr = self.addr.load(Relaxed);
+            let current_tail = self.tail.load(Relaxed);
+            let new_tail = current_tail + actual_size;
+            if new_tail >= addr + HEAP_VIRT_SIZE {
                 // may overflow the address space, need to allocate another address space
                 // Fetch the old base address for reference in CAS
-                let base = self.addr.load(Ordering::Relaxed);
                 let new_base = allocate_address_space();
-                if self.addr.compare_and_swap(base, new_base as usize, Ordering::Relaxed) != base {
+                if self.addr.compare_and_swap(addr, new_base as usize, Ordering::Relaxed) != addr {
                     // CAS base address failed, give up and release allocated address space
                     // Other thread is also trying to allocate address space and succeeded
                     dealloc_address_space(new_base);
@@ -76,7 +79,6 @@ unsafe impl GlobalAlloc for AllocatorInner {
                 // Anyhow, skip follow statements and retry
                 continue;
             }
-
             if self.tail.compare_and_swap(current_tail, new_tail, Ordering::Relaxed) == current_tail {
                 return new_tail as *mut u8;
             }
@@ -100,27 +102,5 @@ unsafe impl GlobalAlloc for BumpAllocator {
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         ALLOC_INNER.dealloc(ptr, layout)
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use crate::bump_heap::{AllocatorInner, BumpAllocator};
-    use alloc::vec::Vec;
-
-    #[global_allocator]
-    static INTERNAL_ALLOCATOR: BumpAllocator = BumpAllocator;
-
-    #[test]
-    pub fn general() {
-        env_logger::init();
-        let a = AllocatorInner::new();
-        let mut vec = Vec::with_capacity(1);
-        for i in 0..1000 {
-            vec.push(i);
-        }
-        for i in 0..1000 {
-            assert_eq!(vec[i], i);
-        }
     }
 }
