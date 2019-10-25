@@ -67,9 +67,13 @@ pub fn current_thread_id() -> usize {
     unsafe { libc::pthread_self() as usize }
 }
 
+#[cfg(target_os = "linux")]
 pub fn current_numa() -> usize {
-    unimplemented!()
+    SYS_CPU_NODE[libc::sched_getcpu() as usize]
 }
+
+#[cfg(not(target_os = "linux"))]
+pub fn current_numa() -> usize { 0 }
 
 #[cfg(test)]
 mod test {
@@ -77,7 +81,7 @@ mod test {
 
     #[test]
     fn numa_nodes() {
-        for node in SYS_NUMA_NODES.iter() {
+        for (cpu, node) in SYS_CPU_NODE.iter() {
             println!("{}", node);
         }
     }
