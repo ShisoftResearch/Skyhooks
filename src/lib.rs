@@ -1,4 +1,5 @@
-#![no_std]
+// Gave up on no_std for filesystem is required for this allocator to get CPU related information
+
 #![feature(alloc_layout_extra)]
 #![feature(alloc_error_handler)]
 #![feature(core_intrinsics)]

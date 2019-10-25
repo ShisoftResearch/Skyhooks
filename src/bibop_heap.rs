@@ -1,6 +1,17 @@
 use super::*;
 use crate::generic_heap::ObjectMeta;
 
+const NUM_SIZE_CLASS: usize = 16;
+
+type TSizeClasses = [SizeClass; NUM_SIZE_CLASS];
+
+lazy_static! {
+}
+
+struct SizeClass {
+    size: usize
+}
+
 pub struct Heap {
 
 }
