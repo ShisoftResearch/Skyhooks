@@ -69,7 +69,7 @@ pub fn current_thread_id() -> usize {
 
 #[cfg(target_os = "linux")]
 pub fn current_numa() -> usize {
-    SYS_CPU_NODE[libc::sched_getcpu() as usize]
+    SYS_CPU_NODE.get(libc::sched_getcpu() as usize).unwrap_or(0)
 }
 
 #[cfg(not(target_os = "linux"))]
