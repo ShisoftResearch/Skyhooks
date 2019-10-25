@@ -31,7 +31,7 @@ lazy_static!{
                         .unwrap())
                     .collect::<Vec<usize>>()
             }
-            Err(_) => vec![]
+            Err(_) => vec![0]
         }
     };
 }
