@@ -39,12 +39,15 @@ lazy_static!{
                                 f.ok().map(|f|
                                     f.file_name().to_str().unwrap().to_string()))
                             .filter(|f| cpu_regex.is_match(f))
-                            .map(|f| number_regex
-                                .captures_iter(&node_name)
-                                .next()
-                                .unwrap()[0]
-                                .parse::<usize>()
-                                .unwrap())
+                            .map(|f| {
+                                let id = number_regex
+                                    .captures_iter(&f)
+                                    .next()
+                                    .unwrap()[0]
+                                    .parse::<usize>()
+                                    .unwrap();
+                                id
+                            })
                             .map(|cpu_id| (cpu_id, node_num))
                             .collect::<Vec<_>>();
                         cpus
@@ -69,7 +72,7 @@ pub fn current_thread_id() -> usize {
 
 #[cfg(target_os = "linux")]
 pub fn current_numa() -> usize {
-    SYS_CPU_NODE.get(libc::sched_getcpu() as usize).unwrap_or(0)
+    SYS_CPU_NODE.get(unsafe {&(libc::sched_getcpu() as usize)}).map(|x| *x).unwrap_or(0)
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -82,7 +85,7 @@ mod test {
     #[test]
     fn numa_nodes() {
         for (cpu, node) in SYS_CPU_NODE.iter() {
-            println!("{}", node);
+            // println!("{} in {}", cpu, node);
         }
     }
 }
