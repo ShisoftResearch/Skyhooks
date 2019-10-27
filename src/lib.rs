@@ -18,6 +18,7 @@ mod large_heap;
 mod mmap;
 mod utils;
 mod lfmap;
+mod lflist;
 
 pub type Ptr = *mut c_void;
 pub type Size = usize;
@@ -27,4 +28,7 @@ pub const NULL_PTR: *mut c_void = NULL as *mut c_void;
 
 use core::alloc::{GlobalAlloc, Layout};
 use core::ffi::c_void;
+use crate::bump_heap::BumpAllocator;
 
+//#[global_allocator]
+//static GLOBAL: BumpAllocator = BumpAllocator;

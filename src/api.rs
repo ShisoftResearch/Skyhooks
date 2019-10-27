@@ -24,9 +24,9 @@ pub unsafe fn nu_realloc(ptr: Ptr, size: Size) -> Ptr {
 }
 
 // Allocator for rust itself for internal heaps
-pub struct SelfAllocator;
+pub struct NullocAllocator;
 
-unsafe impl GlobalAlloc for SelfAllocator {
+unsafe impl GlobalAlloc for NullocAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let size = layout.size();
         let align = layout.align();

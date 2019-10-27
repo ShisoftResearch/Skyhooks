@@ -12,7 +12,7 @@ use core::ops::Deref;
 use core::marker::PhantomData;
 use crate::bump_heap::BumpAllocator;
 
-type EntryTemplate = (usize, usize);
+pub type EntryTemplate = (usize, usize);
 
 const EMPTY_KEY: usize = 0;
 const EMPTY_VALUE: usize = 0;

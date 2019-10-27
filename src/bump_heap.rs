@@ -64,7 +64,7 @@ unsafe impl GlobalAlloc for AllocatorInner {
             let addr = self.addr.load(Relaxed);
             let current_tail = self.tail.load(Relaxed);
             let new_tail = current_tail + actual_size;
-            if new_tail >= addr + HEAP_VIRT_SIZE {
+            if new_tail > addr + HEAP_VIRT_SIZE {
                 // may overflow the address space, need to allocate another address space
                 // Fetch the old base address for reference in CAS
                 let new_base = allocate_address_space();
@@ -80,7 +80,7 @@ unsafe impl GlobalAlloc for AllocatorInner {
                 continue;
             }
             if self.tail.compare_and_swap(current_tail, new_tail, Ordering::Relaxed) == current_tail {
-                return new_tail as *mut u8;
+                return current_tail as *mut u8;
             }
             // CAS tail failed, retry
         }

@@ -4,6 +4,7 @@ use lfmap::{ObjectMap, Map};
 use crate::utils::*;
 use crate::mmap::mmap_without_fd;
 use mmap::munmap_memory;
+use core::mem;
 
 // Heap for large objects exceeds maximum tier of pages
 // The large heap will only track its existence and use mmap allocate
@@ -16,7 +17,7 @@ pub struct Heap {
 impl Heap {
     pub fn new() -> Self {
         Self {
-            meta: ObjectMap::with_capacity(128)
+            meta: ObjectMap::with_capacity(512)
         }
     }
     pub unsafe fn allocate(&self, size: usize) -> Ptr {

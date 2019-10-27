@@ -72,7 +72,8 @@ pub fn current_thread_id() -> usize {
 
 #[cfg(target_os = "linux")]
 pub fn current_numa() -> usize {
-    SYS_CPU_NODE.get(unsafe {&(libc::sched_getcpu() as usize)}).map(|x| *x).unwrap_or(0)
+    let cpu = unsafe {(libc::sched_getcpu() as usize)};
+    SYS_CPU_NODE.get(&cpu).map(|x| *x).unwrap_or(0)
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -87,5 +88,11 @@ mod test {
         for (cpu, node) in SYS_CPU_NODE.iter() {
             // println!("{} in {}", cpu, node);
         }
+    }
+
+    #[test]
+    fn numa() {
+        let numa = current_numa();
+        println!("current numa {}", numa);
     }
 }
