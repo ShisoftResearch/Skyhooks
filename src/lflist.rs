@@ -48,20 +48,12 @@ impl List {
                 // either case, retry
                 continue;
             } else {
-                unsafe {
-                    if page.head.compare_and_swap(pos, next_pos, Relaxed) == pos {
-                        let mut insertion_pos = pos;
-                        while insertion_pos < page.upper_bound
-                            && intrinsics::atomic_cxchg_relaxed(
-                                insertion_pos as *mut usize,
-                                0,
-                                item,
-                            )
-                            .0 != 0
-                        {
-                            insertion_pos += mem::size_of::<usize>()
-                        }
-                        debug_assert!(insertion_pos < page.upper_bound);
+                if page.head.compare_and_swap(pos, next_pos, Relaxed) == pos {
+                    let ptr = pos as *mut usize;
+                    if unsafe{intrinsics::atomic_xchg_relaxed(ptr, item)} == 0 {
+                        return;
+                    } else {
+                        unreachable!()
                     }
                 }
             }
@@ -73,7 +65,7 @@ impl List {
             let head_ptr = self.head.load(Relaxed);
             let page = BufferMeta::borrow(head_ptr);
             let pos = page.head.load(Relaxed);
-            let next_pos = pos - mem::size_of::<usize>();
+            let new_pos = pos - mem::size_of::<usize>();
             if pos == page.lower_bound && page.next.load(Relaxed) == NULL_BUFFER {
                 // empty buffer chain
                 return None;
@@ -90,12 +82,12 @@ impl List {
                 }
                 continue;
             }
-            if next_pos >= page.lower_bound && page.head.compare_and_swap(pos, next_pos, Relaxed) != pos {
+            if new_pos >= page.lower_bound && page.head.compare_and_swap(pos, new_pos, Relaxed) != pos {
                 // cannot swap head
                 continue;
             }
-            let res = unsafe { intrinsics::atomic_xchg_relaxed(pos as *mut usize, 0) };
-            assert_ne!(res, 0);
+            let res = unsafe { intrinsics::atomic_xchg_relaxed(new_pos as *mut usize, 0) };
+            assert_ne!(res, 0, "return empty");
             return Some(res)
         }
     }
@@ -180,5 +172,25 @@ impl Deref for BufferRef {
 
     fn deref(&self) -> &Self::Target {
         unsafe { &*self.ptr }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::lflist::List;
+    use crate::utils::SYS_PAGE_SIZE;
+
+    #[test]
+    pub fn general() {
+        let list = List::new();
+        for i in 2..*SYS_PAGE_SIZE {
+            list.push(i);
+        }
+        for i in (2..*SYS_PAGE_SIZE).rev() {
+            assert_eq!(list.pop(), Some(i));
+        }
+        for i in 2..*SYS_PAGE_SIZE {
+            assert_eq!(list.pop(), None);
+        }
     }
 }

@@ -45,10 +45,6 @@ fn dealloc_address_space(address: Ptr) {
 impl AllocatorInner {
     pub fn new() -> Self {
         let addr = allocate_address_space();
-        unsafe {
-            let mut val = *(addr as *mut usize);
-            val = 1;
-        }
         Self {
             addr: AtomicUsize::new(addr as usize),
             tail: AtomicUsize::new(addr as usize)
