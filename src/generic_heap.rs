@@ -27,9 +27,11 @@ pub unsafe fn malloc(size: Size) -> Ptr {
 }
 
 pub unsafe fn free(ptr: Ptr) {
-    if !BIBOP_HEAP.free(ptr) {}
-    else if !LARGE_HEAP.free(ptr) {}
-    else { warn!("Ptr {} does not existed", ptr as usize) }
+    if !BIBOP_HEAP.free(ptr) {
+    } else if !LARGE_HEAP.free(ptr) {
+    } else {
+        warn!("Ptr {} does not existed", ptr as usize)
+    }
 }
 
 pub unsafe fn realloc(ptr: Ptr, size: Size) -> Ptr {
@@ -65,7 +67,7 @@ impl ObjectMeta {
             addr: ptr,
             numa: 0,
             tier: 0,
-            tid: current_thread_id()
+            tid: current_thread_id(),
         }
     }
 }

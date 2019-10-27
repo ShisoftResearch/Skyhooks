@@ -7,12 +7,12 @@
 // Because we cannot use heap in this allocator, meta data will not be kept, dealloc will free
 // memory space immediately. It is very unsafe.
 
+use crate::mmap::{dealloc_regional, mmap_without_fd, munmap_memory};
 use crate::Ptr;
-use crate::mmap::{mmap_without_fd, munmap_memory, dealloc_regional};
-use core::alloc::{GlobalAlloc, Layout};
-use core::sync::atomic::{Ordering, AtomicUsize};
-use core::sync::atomic::Ordering::Relaxed;
 use alloc::vec::Vec;
+use core::alloc::{GlobalAlloc, Layout};
+use core::sync::atomic::Ordering::Relaxed;
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 lazy_static! {
     static ref ALLOC_INNER: AllocatorInner = AllocatorInner::new();
@@ -20,7 +20,7 @@ lazy_static! {
 
 pub struct AllocatorInner {
     tail: AtomicUsize,
-    addr: AtomicUsize
+    addr: AtomicUsize,
 }
 
 const HEAP_VIRT_SIZE: usize = 2 * 1024 * 1024 * 1024; // 2GB
@@ -35,7 +35,6 @@ fn actual_size(layout: &Layout) -> usize {
     layout.padding_needed_for(align) + size
 }
 
-
 // dealloc address space only been used when CAS base failed
 // Even noop will be fine, we still want to return the space the the OS because we can
 fn dealloc_address_space(address: Ptr) {
@@ -47,7 +46,7 @@ impl AllocatorInner {
         let addr = allocate_address_space();
         Self {
             addr: AtomicUsize::new(addr as usize),
-            tail: AtomicUsize::new(addr as usize)
+            tail: AtomicUsize::new(addr as usize),
         }
     }
 }
@@ -64,7 +63,11 @@ unsafe impl GlobalAlloc for AllocatorInner {
                 // may overflow the address space, need to allocate another address space
                 // Fetch the old base address for reference in CAS
                 let new_base = allocate_address_space();
-                if self.addr.compare_and_swap(addr, new_base as usize, Ordering::Relaxed) != addr {
+                if self
+                    .addr
+                    .compare_and_swap(addr, new_base as usize, Ordering::Relaxed)
+                    != addr
+                {
                     // CAS base address failed, give up and release allocated address space
                     // Other thread is also trying to allocate address space and succeeded
                     dealloc_address_space(new_base);
@@ -75,7 +78,11 @@ unsafe impl GlobalAlloc for AllocatorInner {
                 // Anyhow, skip follow statements and retry
                 continue;
             }
-            if self.tail.compare_and_swap(current_tail, new_tail, Ordering::Relaxed) == current_tail {
+            if self
+                .tail
+                .compare_and_swap(current_tail, new_tail, Ordering::Relaxed)
+                == current_tail
+            {
                 return current_tail as *mut u8;
             }
             // CAS tail failed, retry

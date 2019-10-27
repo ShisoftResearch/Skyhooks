@@ -12,16 +12,14 @@ thread_local! {
 
 struct ThreadMeta {
     numa: usize,
-    tid: usize
+    tid: usize,
 }
 
 struct SizeClass {
-    size: usize
+    size: usize,
 }
 
-pub struct Heap {
-
-}
+pub struct Heap {}
 
 impl Heap {
     pub fn new() -> Self {
@@ -48,7 +46,7 @@ impl ThreadMeta {
     pub fn new() -> Self {
         Self {
             numa: current_numa(),
-            tid: current_thread_id()
+            tid: current_thread_id(),
         }
     }
 }

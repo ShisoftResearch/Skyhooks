@@ -1,6 +1,6 @@
 use super::*;
-use libc::*;
 use core::ptr;
+use libc::*;
 
 pub fn mmap_without_fd(size: usize) -> Ptr {
     let ptr = unsafe {
@@ -10,12 +10,11 @@ pub fn mmap_without_fd(size: usize) -> Ptr {
             PROT_READ | PROT_WRITE,
             MAP_ANONYMOUS | MAP_PRIVATE,
             -1,
-            0
+            0,
         )
     };
     if ptr == -1 as isize as *mut c_void {
-        let err =
-        panic!("mmap failed {}");
+        let err = panic!("mmap failed {}");
     };
     ptr
 }
@@ -27,9 +26,7 @@ pub fn munmap_memory(address: Ptr, size: usize) {
 }
 
 pub fn dealloc_regional(addr: Ptr, size: usize) -> usize {
-    unsafe {
-        madvise(addr, size, MADV_DONTNEED) as usize
-    }
+    unsafe { madvise(addr, size, MADV_DONTNEED) as usize }
 }
 
 #[cfg(test)]
@@ -39,8 +36,8 @@ mod test {
 
     #[test]
     pub fn mmap() {
-        let mut val = unsafe { *(mmap_without_fd(mem::size_of::<usize>()) as *mut usize) } ;
-        for  i in 0..100 {
+        let mut val = unsafe { *(mmap_without_fd(mem::size_of::<usize>()) as *mut usize) };
+        for i in 0..100 {
             val = i;
         }
         assert_eq!(val, 99);

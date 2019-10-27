@@ -1,6 +1,6 @@
+use crate::{generic_heap, Ptr, Size, NULL_PTR};
 use core::alloc::{GlobalAlloc, Layout};
 use libc::*;
-use crate::{generic_heap, NULL_PTR, Ptr, Size};
 
 pub unsafe fn nu_malloc(size: Size) -> Ptr {
     generic_heap::malloc(size)
@@ -37,4 +37,3 @@ unsafe impl GlobalAlloc for NullocAllocator {
         nu_free(ptr as Ptr)
     }
 }
-

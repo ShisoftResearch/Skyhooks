@@ -4,9 +4,9 @@ use crate::bump_heap::BumpAllocator;
 use crate::utils::SYS_PAGE_SIZE;
 use core::{intrinsics, mem};
 use std::alloc::{GlobalAlloc, Layout};
-use std::sync::atomic::Ordering::{Relaxed};
-use std::sync::atomic::{AtomicPtr, AtomicUsize};
 use std::ops::Deref;
+use std::sync::atomic::Ordering::Relaxed;
+use std::sync::atomic::{AtomicPtr, AtomicUsize};
 
 const NULL_BUFFER: *mut BufferMeta = 0 as *mut BufferMeta;
 
@@ -50,7 +50,7 @@ impl List {
             } else {
                 if page.head.compare_and_swap(pos, next_pos, Relaxed) == pos {
                     let ptr = pos as *mut usize;
-                    if unsafe{intrinsics::atomic_xchg_relaxed(ptr, item)} == 0 {
+                    if unsafe { intrinsics::atomic_xchg_relaxed(ptr, item) } == 0 {
                         return;
                     } else {
                         unreachable!()
@@ -82,13 +82,15 @@ impl List {
                 }
                 continue;
             }
-            if new_pos >= page.lower_bound && page.head.compare_and_swap(pos, new_pos, Relaxed) != pos {
+            if new_pos >= page.lower_bound
+                && page.head.compare_and_swap(pos, new_pos, Relaxed) != pos
+            {
                 // cannot swap head
                 continue;
             }
             let res = unsafe { intrinsics::atomic_xchg_relaxed(new_pos as *mut usize, 0) };
             assert_ne!(res, 0, "return empty");
-            return Some(res)
+            return Some(res);
         }
     }
 }
@@ -104,7 +106,7 @@ impl BufferMeta {
             next: AtomicPtr::new(NULL_BUFFER),
             refs: AtomicUsize::new(1),
             upper_bound: head_page_address + page_size,
-            lower_bound: start
+            lower_bound: start,
         };
         head_page
     }
@@ -132,9 +134,7 @@ impl BufferMeta {
             let buffer = unsafe { &*buffer };
             buffer.refs.fetch_add(1, Relaxed);
         }
-        BufferRef {
-            ptr: buffer
-        }
+        BufferRef { ptr: buffer }
     }
 }
 
@@ -154,7 +154,7 @@ fn dealloc_mem(ptr: usize, size: usize) {
 }
 
 struct BufferRef {
-    ptr: *mut BufferMeta
+    ptr: *mut BufferMeta,
 }
 
 impl Drop for BufferRef {
