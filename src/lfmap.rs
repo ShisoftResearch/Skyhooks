@@ -59,8 +59,7 @@ pub struct Chunk<V, A: Attachment<V>> {
     // floating-point multiplication is slow, cache this value and recompute every time when resize
     occu_limit: usize,
     occupation: AtomicUsize,
-    referenced: AtomicUsize,
-    is_garbage: AtomicBool,
+    refs: AtomicUsize,
     attachment: A,
     shadow: PhantomData<V>
 }
@@ -510,8 +509,7 @@ impl <V, A: Attachment<V>> Chunk <V, A> {
             base, capacity,
             occupation: AtomicUsize::new(0),
             occu_limit: occupation_limit(capacity),
-            is_garbage: AtomicBool::new(false),
-            referenced: AtomicUsize::new(0),
+            refs: AtomicUsize::new(1),
             attachment: A::new(capacity),
             shadow: PhantomData
         }) };
@@ -519,7 +517,7 @@ impl <V, A: Attachment<V>> Chunk <V, A> {
     }
     unsafe fn borrow(ptr: *mut Chunk<V, A>) -> ChunkRef<V, A> {
         let chunk = &*ptr;
-        chunk.referenced.fetch_add(1, Relaxed);
+        chunk.refs.fetch_add(1, Relaxed);
         ChunkRef {
             chunk: ptr
         }
@@ -531,16 +529,15 @@ impl <V, A: Attachment<V>> Chunk <V, A> {
 
     unsafe fn mark_garbage(ptr: *mut Chunk<V, A>) {
         // Caller promise this chunk will not be reachable from the outside except snapshot in threads
-        let chunk = &*ptr;
-        chunk.is_garbage.store(true, Relaxed);
+        {
+            let chunk = &*ptr;
+            chunk.refs.fetch_sub(1, Relaxed);
+        }
         Self::check_gc(ptr);
     }
     unsafe fn check_gc(ptr: *mut Chunk<V, A>) {
         let chunk = &*ptr;
-        if  chunk.referenced.load(Relaxed) == 0 &&
-            // CAS is_garbage and assume true to avoid double free by other threads
-            chunk.is_garbage.compare_and_swap(true, false, Relaxed) == true
-        {
+        if  chunk.refs.compare_and_swap(0, std::usize::MAX, Relaxed) == 0 {
             chunk.attachment.dealloc();
             dealloc_mem(ptr as usize, mem::size_of::<Self>());
             dealloc_mem(chunk.base, chunk_size_of(chunk.capacity));
@@ -560,7 +557,7 @@ impl <V, A: Attachment<V>>  Drop for ChunkRef<V, A> {
     fn drop(&mut self) {
         if self.chunk as usize == 0 { return }
         let chunk = unsafe { &*self.chunk };
-        chunk.referenced.fetch_sub(1, Relaxed);
+        chunk.refs.fetch_sub(1, Relaxed);
         unsafe { Chunk::check_gc(self.chunk) }
     }
 }
