@@ -74,9 +74,7 @@ impl List {
                 // last item, need to remove this head and swap to the next one
                 let next = page.next.load(Relaxed);
                 if next != NULL_BUFFER {
-                    if self.head.compare_and_swap(head_ptr, next, Relaxed) != head_ptr {
-                        continue;
-                    } else {
+                    if self.head.compare_and_swap(head_ptr, next, Relaxed) == head_ptr {
                         BufferMeta::mark_garbage(head_ptr);
                     }
                 }
@@ -179,18 +177,73 @@ impl Deref for BufferRef {
 mod test {
     use crate::lflist::List;
     use crate::utils::SYS_PAGE_SIZE;
+    use std::sync::Arc;
+    use std::thread;
 
     #[test]
     pub fn general() {
         let list = List::new();
-        for i in 2..*SYS_PAGE_SIZE {
+        let page_size = *SYS_PAGE_SIZE;
+        for i in 2..page_size {
             list.push(i);
         }
-        for i in (2..*SYS_PAGE_SIZE).rev() {
+        for i in (2..page_size).rev() {
             assert_eq!(list.pop(), Some(i));
         }
-        for i in 2..*SYS_PAGE_SIZE {
+        for i in 2..page_size {
             assert_eq!(list.pop(), None);
         }
+    }
+
+    #[test]
+    pub fn parallel() {
+        let list = Arc::new(List::new());
+        let page_size = *SYS_PAGE_SIZE;
+        let mut threads = (1..page_size).map(|i| {
+            let list = list.clone();
+            thread::spawn(move || {
+                list.push(i);
+            })
+        }).collect::<Vec<_>>();
+        for t in threads {
+            t.join();
+        }
+
+        let mut counter = 0;
+        while list.pop().is_some() {
+            counter += 1;
+        }
+        assert_eq!(counter, page_size - 1);
+
+        for i in 1..page_size {
+            list.push(i);
+        }
+        let recev_list = Arc::new(List::new());
+        threads = (page_size..(page_size * 2)).map(|i| {
+            let list = list.clone();
+            let recev_list = recev_list.clone();
+            thread::spawn(move || {
+                if i % 2 == 0 {
+                    list.push(i);
+                } else {
+                    let pop_val = list.pop().unwrap();
+                    recev_list.push(pop_val);
+                }
+            })
+        }).collect::<Vec<_>>();
+        for t in threads {
+            t.join();
+        }
+
+        let mut agg = vec![];
+        while let Some(v) = list.pop() {
+            agg.push(v);
+        }
+        while let Some(v) = recev_list.pop() {
+            agg.push(v);
+        }
+        agg.sort();
+        let total_insertion = page_size + page_size / 2 - 1;
+        assert_eq!(agg.len(), total_insertion);
     }
 }
