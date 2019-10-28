@@ -243,6 +243,7 @@ mod test {
             agg.push(v);
         }
         agg.sort();
+        agg.dedup_by_key(|k| *k);
         let total_insertion = page_size + page_size / 2 - 1;
         assert_eq!(agg.len(), total_insertion);
     }
