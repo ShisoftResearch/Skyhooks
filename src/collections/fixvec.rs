@@ -5,4 +5,10 @@ pub struct  FixedVec<T> {
     size: usize
 }
 
+impl <T> FixedVec<T> {
+    pub fn new(cap: usize) {
+
+    }
+}
+
 
