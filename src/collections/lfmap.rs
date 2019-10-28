@@ -594,7 +594,7 @@ fn alloc_mem(size: usize) -> usize {
     let align = mem::align_of::<EntryTemplate>();
     let layout = Layout::from_size_align(size, align).unwrap();
     // must be all zeroed
-    unsafe { BumpAllocator.alloc_zeroed(layout) }.unwrap().as_ptr() as usize
+    unsafe { BumpAllocator.alloc_zeroed(layout) as usize }
 }
 
 #[inline(always)]
