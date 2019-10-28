@@ -175,7 +175,7 @@ impl Deref for BufferRef {
 
 #[cfg(test)]
 mod test {
-    use crate::lflist::List;
+    use crate::collections::lflist::List;
     use crate::utils::SYS_PAGE_SIZE;
     use std::sync::Arc;
     use std::thread;

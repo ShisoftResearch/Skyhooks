@@ -731,9 +731,9 @@ impl Map<usize, usize> for WordMap {
 
 #[cfg(test)]
 mod test {
-    use crate::lfmap::*;
     use std::sync::Arc;
     use std::thread;
+    use crate::collections::lfmap::*;
 
     #[test]
     fn will_not_overflow() {
