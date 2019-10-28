@@ -15,10 +15,10 @@ mod bibop_heap;
 mod bump_heap;
 mod generic_heap;
 mod large_heap;
-mod lflist;
-mod lfmap;
 mod mmap;
 mod utils;
+
+mod collections;
 
 pub type Ptr = *mut c_void;
 pub type Size = usize;
