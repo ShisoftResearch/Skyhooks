@@ -501,7 +501,7 @@ impl Value {
             } else {
                 let actual_val = val & table.val_bit_mask;
                 let flag = val & table.inv_bit_mask;
-                if flag == 1 {
+                if flag != 0 {
                     ParsedValue::Prime(actual_val)
                 } else if actual_val == 1 {
                     ParsedValue::Sentinel
