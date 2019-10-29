@@ -32,3 +32,13 @@ impl <T> Index<usize> for FixedVec<T> {
         return unsafe { &*(obj_ptr as *mut T) };
     }
 }
+
+impl <T> IndexMut <usize> for FixedVec<T> {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        let obj_ptr = self.ptr as usize + index * mem::size_of::<T>();
+        return unsafe { &mut *(obj_ptr as *mut T) };
+    }
+}
+
+unsafe impl <T> Send for FixedVec<T> {}
+unsafe impl <T> Sync for FixedVec<T> {}

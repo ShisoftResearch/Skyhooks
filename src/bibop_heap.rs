@@ -2,6 +2,7 @@ use super::*;
 use crate::generic_heap::ObjectMeta;
 use crate::utils::{current_numa, current_thread_id};
 use crate::collections::lflist;
+use crate::collections::fixvec::FixedVec;
 
 const NUM_SIZE_CLASS: usize = 16;
 const CACHE_LINE_SIZE: usize = 64;
@@ -13,7 +14,7 @@ thread_local! {
 }
 
 lazy_static! {
-    // static ref PER_NODE_META: Vec
+    static ref PER_NODE_META: FixedVec<NodeMeta> = gen_numa_node_list();
 }
 
 struct ThreadMeta {
@@ -67,4 +68,15 @@ impl Drop for ThreadMeta {
     fn drop(&mut self) {
         unimplemented!()
     }
+}
+
+fn gen_numa_node_list() -> FixedVec<NodeMeta> {
+    let num_nodes = *utils::NUM_NUMA_NODES;
+    let mut nodes = FixedVec::new(num_nodes);
+    for i in 0..num_nodes {
+        nodes[i] = NodeMeta {
+            
+        }
+    }
+    unimplemented!()
 }
