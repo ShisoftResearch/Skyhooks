@@ -12,6 +12,7 @@ log = { version = "0.4.8" }
 lazy_static = { version = "*" }
 regex = "*"
 num_cpus = "1.0"
+sysinfo = "*"
 
 [dev-dependencies]
 env_logger = "0.7.1"

@@ -3,11 +3,13 @@ use regex::Regex;
 use std::collections::HashMap;
 use std::fs::{read_dir, ReadDir};
 use std::io::Error;
+use sysinfo::{ProcessExt, SystemExt};
 
 lazy_static! {
     pub static ref SYS_PAGE_SIZE: usize = unsafe { sysconf(_SC_PAGESIZE) as usize };
     pub static ref SYS_CPU_NODE: HashMap<usize, usize> = cpu_topology();
     pub static ref NUM_NUMA_NODES: usize = num_numa_nodes();
+    pub static ref SYS_TOTAL_MEM: usize = total_memory();
 }
 
 pub fn align_padding(len: usize, align: usize) -> usize {
@@ -66,6 +68,12 @@ pub fn num_numa_nodes() -> usize {
     let mut vec = SYS_CPU_NODE.iter().map(|(_, v)| *v).collect::<Vec<_>>();
     vec.dedup();
     vec.len()
+}
+
+pub fn total_memory() -> usize {
+    let mut system = sysinfo::System::new();
+    system.refresh_system();
+    system.get_total_memory() as usize * 1024 // in bytes
 }
 
 #[cfg(target_os = "linux")]

@@ -2,9 +2,10 @@ use super::*;
 use crate::collections::fixvec::FixedVec;
 use crate::collections::lflist;
 use crate::generic_heap::ObjectMeta;
-use crate::utils::{current_numa, current_thread_id};
+use crate::utils::{current_numa, current_thread_id, SYS_TOTAL_MEM, NUM_NUMA_NODES};
 use core::mem::MaybeUninit;
 use core::mem;
+use crate::mmap::mmap_without_fd;
 
 const NUM_SIZE_CLASS: usize = 16;
 const CACHE_LINE_SIZE: usize = 64;
@@ -16,6 +17,7 @@ thread_local! {
 }
 
 lazy_static! {
+    static ref HEAP_BASE: usize = mmap_without_fd(total_heap()) as usize;
     static ref PER_NODE_META: FixedVec<NodeMeta> = gen_numa_node_list();
 }
 
@@ -26,6 +28,7 @@ struct ThreadMeta {
 }
 
 struct NodeMeta {
+    heap_base: usize,
     free_list: lflist::List
 }
 
@@ -34,27 +37,24 @@ struct SizeClass {
     free_list: lflist::List,
 }
 
-pub struct Heap {}
+pub struct Heap {
+    addr: usize
+}
 
-impl Heap {
-    pub fn new() -> Self {
-        unimplemented!()
-    }
-    pub fn allocate(&self, size: usize) -> Ptr {
-        unimplemented!()
-    }
-    pub fn contains(&self, ptr: Ptr) -> bool {
-        unimplemented!()
-    }
-    pub fn free(&self, ptr: Ptr) -> bool {
-        unimplemented!()
-    }
-    pub fn meta_of(&self, ptr: Ptr) -> Option<ObjectMeta> {
-        unimplemented!()
-    }
-    pub fn size_of(&self, ptr: Ptr) -> Option<usize> {
-        unimplemented!()
-    }
+pub fn allocate(size: usize) -> Ptr {
+    unimplemented!()
+}
+pub fn contains(ptr: Ptr) -> bool {
+    unimplemented!()
+}
+pub fn free( ptr: Ptr) -> bool {
+    unimplemented!()
+}
+pub fn meta_of(ptr: Ptr) -> Option<ObjectMeta> {
+    unimplemented!()
+}
+pub fn size_of(ptr: Ptr) -> Option<usize> {
+    unimplemented!()
 }
 
 impl ThreadMeta {
@@ -84,12 +84,15 @@ impl SizeClass {
 }
 
 fn gen_numa_node_list() -> FixedVec<NodeMeta> {
-    let num_nodes = *utils::NUM_NUMA_NODES;
+    let num_nodes = *NUM_NUMA_NODES;
     let mut nodes = FixedVec::new(num_nodes);
+    let mut base = *HEAP_BASE;
     for i in 0..num_nodes {
         nodes[i] = NodeMeta {
-            free_list: lflist::List::new()
-        }
+            free_list: lflist::List::new(),
+            heap_base: base
+        };
+        base += per_node_heap();
     }
     return nodes;
 }
@@ -105,4 +108,12 @@ fn size_classes() -> TSizeClasses {
         tier *= 2;
     };
     unsafe { mem::transmute::<_, TSizeClasses>(data) }
+}
+
+fn per_node_heap() -> usize {
+    *SYS_TOTAL_MEM
+}
+
+fn total_heap() -> usize {
+    per_node_heap() * *NUM_NUMA_NODES
 }

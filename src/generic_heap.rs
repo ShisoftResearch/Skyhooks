@@ -5,7 +5,6 @@ use utils::current_thread_id;
 static LARGE_OBJ_THRESHOLD: usize = 1024 * 1024;
 
 lazy_static! {
-    static ref BIBOP_HEAP: bibop_heap::Heap = bibop_heap::Heap::new();
     static ref LARGE_HEAP: large_heap::Heap = large_heap::Heap::new();
 }
 
@@ -22,12 +21,12 @@ pub unsafe fn malloc(size: Size) -> Ptr {
     if size >= LARGE_OBJ_THRESHOLD {
         LARGE_HEAP.allocate(size)
     } else {
-        BIBOP_HEAP.allocate(size)
+        bibop_heap::allocate(size)
     }
 }
 
 pub unsafe fn free(ptr: Ptr) {
-    if !BIBOP_HEAP.free(ptr) {
+    if !bibop_heap::free(ptr) {
     } else if !LARGE_HEAP.free(ptr) {
     } else {
         warn!("Ptr {} does not existed", ptr as usize)
@@ -42,7 +41,7 @@ pub unsafe fn realloc(ptr: Ptr, size: Size) -> Ptr {
         free(ptr);
         return NULL_PTR;
     }
-    let old_size = if let Some(size) = BIBOP_HEAP.size_of(ptr) {
+    let old_size = if let Some(size) = bibop_heap::size_of(ptr) {
         size
     } else if let Some(meta) = LARGE_HEAP.size_of(ptr) {
         size

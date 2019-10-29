@@ -8,7 +8,6 @@ use std::ops::{Index, IndexMut};
 
 pub struct FixedVec<T> {
     ptr: *mut T,
-    size: usize,
 }
 
 impl<T> FixedVec<T> {
@@ -18,7 +17,6 @@ impl<T> FixedVec<T> {
         let total_size = obj_size * cap;
         let layout = Layout::from_size_align(total_size, align).unwrap();
         Self {
-            size: total_size,
             ptr: unsafe { BumpAllocator.alloc(layout) } as *mut T,
         }
     }
