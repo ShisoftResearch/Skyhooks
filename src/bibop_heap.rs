@@ -1,8 +1,8 @@
 use super::*;
+use crate::collections::fixvec::FixedVec;
+use crate::collections::lflist;
 use crate::generic_heap::ObjectMeta;
 use crate::utils::{current_numa, current_thread_id};
-use crate::collections::lflist;
-use crate::collections::fixvec::FixedVec;
 
 const NUM_SIZE_CLASS: usize = 16;
 const CACHE_LINE_SIZE: usize = 64;
@@ -22,13 +22,11 @@ struct ThreadMeta {
     tid: usize,
 }
 
-struct NodeMeta {
-
-}
+struct NodeMeta {}
 
 struct SizeClass {
     size: usize,
-    free_list: lflist::List
+    free_list: lflist::List,
 }
 
 pub struct Heap {}
@@ -74,9 +72,7 @@ fn gen_numa_node_list() -> FixedVec<NodeMeta> {
     let num_nodes = *utils::NUM_NUMA_NODES;
     let mut nodes = FixedVec::new(num_nodes);
     for i in 0..num_nodes {
-        nodes[i] = NodeMeta {
-            
-        }
+        nodes[i] = NodeMeta {}
     }
     unimplemented!()
 }

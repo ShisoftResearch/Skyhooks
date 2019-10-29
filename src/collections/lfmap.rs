@@ -191,8 +191,8 @@ impl<V: Copy, A: Attachment<V>> Table<V, A> {
     }
 
     fn ensure_write_new<R, F>(&self, f: F) -> R
-        where
-            F: Fn(*mut Chunk<V, A>) -> Result<R, R>,
+    where
+        F: Fn(*mut Chunk<V, A>) -> Result<R, R>,
     {
         loop {
             let new_chunk_ptr = self.new_chunk.load(SeqCst);
@@ -791,9 +791,9 @@ fn dealloc_mem(ptr: usize, size: usize) {
 
 #[cfg(test)]
 mod test {
+    use crate::collections::lfmap::*;
     use std::sync::Arc;
     use std::thread;
-    use crate::collections::lfmap::*;
 
     #[test]
     fn will_not_overflow() {

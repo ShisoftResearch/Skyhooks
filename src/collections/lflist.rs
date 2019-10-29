@@ -199,12 +199,14 @@ mod test {
     pub fn parallel() {
         let list = Arc::new(List::new());
         let page_size = *SYS_PAGE_SIZE;
-        let mut threads = (1..page_size).map(|i| {
-            let list = list.clone();
-            thread::spawn(move || {
-                list.push(i);
+        let mut threads = (1..page_size)
+            .map(|i| {
+                let list = list.clone();
+                thread::spawn(move || {
+                    list.push(i);
+                })
             })
-        }).collect::<Vec<_>>();
+            .collect::<Vec<_>>();
         for t in threads {
             t.join();
         }
@@ -219,18 +221,20 @@ mod test {
             list.push(i);
         }
         let recev_list = Arc::new(List::new());
-        threads = (page_size..(page_size * 2)).map(|i| {
-            let list = list.clone();
-            let recev_list = recev_list.clone();
-            thread::spawn(move || {
-                if i % 2 == 0 {
-                    list.push(i);
-                } else {
-                    let pop_val = list.pop().unwrap();
-                    recev_list.push(pop_val);
-                }
+        threads = (page_size..(page_size * 2))
+            .map(|i| {
+                let list = list.clone();
+                let recev_list = recev_list.clone();
+                thread::spawn(move || {
+                    if i % 2 == 0 {
+                        list.push(i);
+                    } else {
+                        let pop_val = list.pop().unwrap();
+                        recev_list.push(pop_val);
+                    }
+                })
             })
-        }).collect::<Vec<_>>();
+            .collect::<Vec<_>>();
         for t in threads {
             t.join();
         }
