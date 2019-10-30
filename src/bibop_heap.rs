@@ -1,11 +1,13 @@
 use super::*;
 use crate::collections::fixvec::FixedVec;
-use crate::collections::lflist;
+use crate::collections::{lflist, lfmap};
 use crate::generic_heap::ObjectMeta;
 use crate::utils::{current_numa, current_thread_id, SYS_TOTAL_MEM, NUM_NUMA_NODES};
 use core::mem::MaybeUninit;
 use core::mem;
 use crate::mmap::mmap_without_fd;
+use core::sync::atomic::AtomicUsize;
+use crate::collections::lfmap::Map;
 
 const NUM_SIZE_CLASS: usize = 16;
 const CACHE_LINE_SIZE: usize = 64;
@@ -20,7 +22,7 @@ lazy_static! {
     static ref TOTAL_HEAP_SIZE: usize = total_heap();
     static ref HEAP_BASE: usize = mmap_without_fd(*TOTAL_HEAP_SIZE) as usize;
     static ref PER_NODE_META: FixedVec<NodeMeta> = gen_numa_node_list();
-    static ref NODE_SHIFT_BITS: usize = log_2_of(*TOTAL_HEAP_SIZE)  - log_2_of(*NUM_NUMA_NODES);
+    static ref NODE_SHIFT_BITS: usize = log_2_of(*TOTAL_HEAP_SIZE) - log_2_of(*NUM_NUMA_NODES);
 }
 
 struct ThreadMeta {
@@ -30,13 +32,23 @@ struct ThreadMeta {
 }
 
 struct NodeMeta {
-    heap_base: usize,
-    free_list: lflist::List
+    base: usize,
+    alloc_pos: AtomicUsize,
+    sizes: TSizeClasses,
+    pending_free: lflist::List,
+    objects: lfmap::ObjectMap<ObjectMeta>
 }
 
 struct SizeClass {
     size: usize,
+    // reserved page for every size class to ensure utilization
+    reserved: ReservedPage,
     free_list: lflist::List,
+}
+
+struct ReservedPage {
+    addr: AtomicUsize,
+    pos: AtomicUsize,
 }
 
 pub struct Heap {
@@ -44,19 +56,29 @@ pub struct Heap {
 }
 
 pub fn allocate(size: usize) -> Ptr {
-    unimplemented!()
+    THREAD_META.with(|meta| {
+        unimplemented!()
+    })
 }
 pub fn contains(ptr: Ptr) -> bool {
-    unimplemented!()
+    THREAD_META.with(|meta| {
+        unimplemented!()
+    })
 }
-pub fn free( ptr: Ptr) -> bool {
-    unimplemented!()
+pub fn free(ptr: Ptr) -> bool {
+    THREAD_META.with(|meta| {
+        unimplemented!()
+    })
 }
 pub fn meta_of(ptr: Ptr) -> Option<ObjectMeta> {
-    unimplemented!()
+    THREAD_META.with(|meta| {
+        unimplemented!()
+    })
 }
 pub fn size_of(ptr: Ptr) -> Option<usize> {
-    unimplemented!()
+    THREAD_META.with(|meta| {
+        unimplemented!()
+    })
 }
 
 impl ThreadMeta {
@@ -80,7 +102,17 @@ impl SizeClass {
     pub fn new(tier: usize) -> Self {
         Self {
             size: tier,
+            reserved: ReservedPage::new(),
             free_list: lflist::List::new()
+        }
+    }
+}
+
+impl ReservedPage {
+    pub fn new() -> Self {
+        ReservedPage {
+            addr: AtomicUsize::new(0),
+            pos: AtomicUsize::new(0)
         }
     }
 }
@@ -91,9 +123,13 @@ fn gen_numa_node_list() -> FixedVec<NodeMeta> {
     let mut nodes = FixedVec::new(num_nodes);
     let mut heap_base = *HEAP_BASE;
     for i in 0..num_nodes {
+        let node_base = heap_base + (i << node_shift_bits);
         nodes[i] = NodeMeta {
-            free_list: lflist::List::new(),
-            heap_base: heap_base + (i << node_shift_bits)
+            base: node_base,
+            alloc_pos: AtomicUsize::new(node_base),
+            sizes: size_classes(),
+            pending_free: lflist::List::new(),
+            objects: lfmap::ObjectMap::with_capacity(512)
         };
     }
     return nodes;
@@ -103,10 +139,7 @@ fn size_classes() -> TSizeClasses {
     let mut data: [MaybeUninit<SizeClass>; NUM_SIZE_CLASS] = unsafe { MaybeUninit::uninit().assume_init() };
     let mut tier = 2;
     for elem in &mut data[..] {
-        *elem = MaybeUninit::new(SizeClass {
-            size: tier,
-            free_list: lflist::List::new()
-        });
+        *elem = MaybeUninit::new(SizeClass::new(tier));
         tier *= 2;
     };
     unsafe { mem::transmute::<_, TSizeClasses>(data) }
