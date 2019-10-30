@@ -1,9 +1,8 @@
 // usize lock-free, wait free paged linked list stack
 
 use crate::bump_heap::BumpAllocator;
-use crate::utils::SYS_PAGE_SIZE;
+use crate::utils::*;
 use core::{intrinsics, mem};
-use std::alloc::{GlobalAlloc, Layout};
 use std::ops::Deref;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicPtr, AtomicUsize};
@@ -93,10 +92,23 @@ impl List {
     }
 }
 
+impl Drop for List {
+    fn drop(&mut self) {
+        unsafe {
+            let mut node_ptr = self.head.load(Relaxed);
+            while node_ptr as usize != 0 {
+                let next_ptr = (&*node_ptr).next.load(Relaxed);
+                BufferMeta::mark_garbage(node_ptr);
+                node_ptr = next_ptr;
+            }
+        }
+    }
+}
+
 impl BufferMeta {
     pub fn new() -> *mut BufferMeta {
         let page_size = *SYS_PAGE_SIZE;
-        let head_page = alloc_mem(page_size) as *mut BufferMeta;
+        let head_page = alloc_mem::<usize>(page_size) as *mut BufferMeta;
         let head_page_address = head_page as usize;
         let start = head_page_address + mem::size_of::<BufferMeta>();
         *(unsafe { &mut *head_page }) = Self {
@@ -124,7 +136,7 @@ impl BufferMeta {
                 return;
             }
         }
-        dealloc_mem(buffer as usize, *SYS_PAGE_SIZE)
+        dealloc_mem::<usize>(buffer as usize, *SYS_PAGE_SIZE)
     }
 
     fn borrow(buffer: *mut BufferMeta) -> BufferRef {
@@ -134,21 +146,6 @@ impl BufferMeta {
         }
         BufferRef { ptr: buffer }
     }
-}
-
-#[inline(always)]
-fn alloc_mem(size: usize) -> usize {
-    let align = mem::align_of::<usize>();
-    let layout = Layout::from_size_align(size, align).unwrap();
-    // must be all zeroed
-    unsafe { BumpAllocator.alloc_zeroed(layout) as usize }
-}
-
-#[inline(always)]
-fn dealloc_mem(ptr: usize, size: usize) {
-    let align = mem::align_of::<usize>();
-    let layout = Layout::from_size_align(size, align).unwrap();
-    unsafe { BumpAllocator.dealloc(ptr as *mut u8, layout) }
 }
 
 struct BufferRef {

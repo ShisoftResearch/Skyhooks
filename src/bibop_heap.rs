@@ -11,6 +11,7 @@ use core::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::Relaxed;
 use std::cell::RefCell;
 use std::borrow::Borrow;
+use std::collections::LinkedList;
 
 const NUM_SIZE_CLASS: usize = 16;
 const CACHE_LINE_SIZE: usize = 64;

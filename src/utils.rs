@@ -4,6 +4,9 @@ use std::collections::HashMap;
 use std::fs::{read_dir, ReadDir};
 use std::io::Error;
 use sysinfo::{ProcessExt, SystemExt};
+use core::mem;
+use crate::bump_heap::BumpAllocator;
+use core::alloc::{GlobalAlloc, Layout};
 
 lazy_static! {
     pub static ref SYS_PAGE_SIZE: usize = unsafe { sysconf(_SC_PAGESIZE) as usize };
@@ -90,6 +93,21 @@ pub fn current_numa() -> usize {
 #[inline]
 pub fn is_power_of_2(x: usize) -> bool {
     (x & (x - 1)) == 0
+}
+
+#[inline(always)]
+pub fn alloc_mem<T>(size: usize) -> usize {
+    let align = mem::align_of::<T>();
+    let layout = Layout::from_size_align(size, align).unwrap();
+    // must be all zeroed
+    unsafe { BumpAllocator.alloc_zeroed(layout) as usize }
+}
+
+#[inline(always)]
+pub fn dealloc_mem<T>(ptr: usize, size: usize) {
+    let align = mem::align_of::<T>();
+    let layout = Layout::from_size_align(size, align).unwrap();
+    unsafe { BumpAllocator.dealloc(ptr as *mut u8, layout) }
 }
 
 #[cfg(test)]

@@ -12,6 +12,7 @@ use core::sync::atomic::{fence, AtomicBool, AtomicPtr, AtomicUsize};
 use core::{intrinsics, mem, ptr};
 use crate::utils::is_power_of_2;
 use ModOp::Empty;
+use crate::utils;
 
 pub type EntryTemplate = (usize, usize);
 
@@ -773,17 +774,12 @@ impl Map<usize, usize> for WordMap {
 
 #[inline(always)]
 fn alloc_mem(size: usize) -> usize {
-    let align = mem::align_of::<EntryTemplate>();
-    let layout = Layout::from_size_align(size, align).unwrap();
-    // must be all zeroed
-    unsafe { BumpAllocator.alloc_zeroed(layout) as usize }
+    utils::alloc_mem::<EntryTemplate>(size)
 }
 
 #[inline(always)]
 fn dealloc_mem(ptr: usize, size: usize) {
-    let align = mem::align_of::<EntryTemplate>();
-    let layout = Layout::from_size_align(size, align).unwrap();
-    unsafe { BumpAllocator.dealloc(ptr as *mut u8, layout) }
+    utils::dealloc_mem::<EntryTemplate>(ptr, size)
 }
 
 #[cfg(test)]
