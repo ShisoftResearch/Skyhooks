@@ -89,7 +89,7 @@ pub fn current_numa() -> usize {
 
 #[inline]
 pub fn is_power_of_2(x: usize) -> bool {
-    (x != 0) && ((x & (x - 1)) == 0)
+    (x & (x - 1)) == 0
 }
 
 #[cfg(test)]

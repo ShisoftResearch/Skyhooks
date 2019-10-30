@@ -2,17 +2,19 @@ use super::*;
 use crate::collections::fixvec::FixedVec;
 use crate::collections::{lflist, lfmap};
 use crate::generic_heap::ObjectMeta;
-use crate::utils::{current_numa, current_thread_id, SYS_TOTAL_MEM, NUM_NUMA_NODES, is_power_of_2};
+use crate::utils::*;
 use core::mem::MaybeUninit;
 use core::mem;
 use crate::mmap::mmap_without_fd;
 use core::sync::atomic::AtomicUsize;
 use crate::collections::lfmap::Map;
+use std::sync::atomic::Ordering::Relaxed;
 
 const NUM_SIZE_CLASS: usize = 16;
 const CACHE_LINE_SIZE: usize = 64;
 
 type TSizeClasses = [SizeClass; NUM_SIZE_CLASS];
+type TSizeClassFreeList = [lflist::List; NUM_SIZE_CLASS];
 
 thread_local! {
     static THREAD_META: ThreadMeta = ThreadMeta::new()
@@ -35,7 +37,7 @@ struct NodeMeta {
     id: usize,
     base: usize,
     alloc_pos: AtomicUsize,
-    sizes: TSizeClasses,
+    common_free: TSizeClassFreeList,
     pending_free: lflist::List,
     objects: lfmap::ObjectMap<ObjectMeta>
 }
@@ -59,6 +61,24 @@ pub struct Heap {
 pub fn allocate(size: usize) -> Ptr {
     THREAD_META.with(|meta| {
         // allocate memory inside the thread meta
+        let size_class_index = size_class_index_from_size(size);
+        let size_class = &meta.sizes[size_class_index];
+        // first, looking in the free list
+        if let Some(freed) = size_class.free_list.pop() {
+            return freed as Ptr;
+        }
+
+        // next, ask the reservation station for objects
+        if let Some(reserved) = size_class.reserved.take(size_class.size) {
+            return reserved as Ptr;
+        }
+
+        // allocate from node common list
+        let node = &PER_NODE_META[meta.numa];
+        if let Some(freed) = node.common_free[size_class_index].pop() {
+            return freed as Ptr;
+        }
+
 
         unimplemented!()
     })
@@ -126,6 +146,20 @@ impl ReservedPage {
             pos: AtomicUsize::new(0)
         }
     }
+    pub fn take(&self, size: usize) -> Option<usize> {
+        let page_size = *SYS_PAGE_SIZE;
+        if size >= page_size { return None; }
+        loop {
+            let addr = self.addr.load(Relaxed);
+            if addr == 0 { return None; }
+            let pos = self.pos.load(Relaxed);
+            if pos - addr > page_size { return None; }
+            if self.pos.compare_and_swap(pos, pos + size, Relaxed) == pos {
+                return Some(pos);
+            }
+        }
+    }
+
 }
 
 impl NodeMeta {
@@ -149,7 +183,7 @@ fn gen_numa_node_list() -> FixedVec<NodeMeta> {
             id: i,
             base: node_base,
             alloc_pos: AtomicUsize::new(node_base),
-            sizes: size_classes(),
+            common_free: size_class_free_list(),
             pending_free: lflist::List::new(),
             objects: lfmap::ObjectMap::with_capacity(512)
         };
@@ -165,6 +199,16 @@ fn size_classes() -> TSizeClasses {
         tier *= 2;
     };
     unsafe { mem::transmute::<_, TSizeClasses>(data) }
+}
+
+fn size_class_free_list() -> TSizeClassFreeList {
+    let mut data: [MaybeUninit<lflist::List>; NUM_SIZE_CLASS] = unsafe { MaybeUninit::uninit().assume_init() };
+    let mut tier = 2;
+    for elem in &mut data[..] {
+        *elem = MaybeUninit::new(lflist::List::new());
+        tier *= 2;
+    };
+    unsafe { mem::transmute::<_, TSizeClassFreeList>(data) }
 }
 
 #[inline]
