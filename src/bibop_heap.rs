@@ -17,8 +17,10 @@ thread_local! {
 }
 
 lazy_static! {
-    static ref HEAP_BASE: usize = mmap_without_fd(total_heap()) as usize;
+    static ref TOTAL_HEAP_SIZE: usize = total_heap();
+    static ref HEAP_BASE: usize = mmap_without_fd(*TOTAL_HEAP_SIZE) as usize;
     static ref PER_NODE_META: FixedVec<NodeMeta> = gen_numa_node_list();
+    static ref NODE_SHIFT_BITS: usize = log_2_of(*TOTAL_HEAP_SIZE)  - log_2_of(*NUM_NUMA_NODES);
 }
 
 struct ThreadMeta {
@@ -85,14 +87,14 @@ impl SizeClass {
 
 fn gen_numa_node_list() -> FixedVec<NodeMeta> {
     let num_nodes = *NUM_NUMA_NODES;
+    let node_shift_bits = *NODE_SHIFT_BITS;
     let mut nodes = FixedVec::new(num_nodes);
-    let mut base = *HEAP_BASE;
+    let mut heap_base = *HEAP_BASE;
     for i in 0..num_nodes {
         nodes[i] = NodeMeta {
             free_list: lflist::List::new(),
-            heap_base: base
+            heap_base: heap_base + (i << node_shift_bits)
         };
-        base += per_node_heap();
     }
     return nodes;
 }
@@ -118,8 +120,8 @@ fn total_heap() -> usize {
     min_power_of_2(per_node_heap() * *NUM_NUMA_NODES)
 }
 
-fn min_power_of_2(n: usize) -> usize {
-    let count = 0;
+fn min_power_of_2(mut n: usize) -> usize {
+    let mut count = 0;
     // First n in the below condition
     // is for the case where n is 0
     if n > 0 && (n & (n - 1)) == 0 { return n; }
@@ -128,4 +130,8 @@ fn min_power_of_2(n: usize) -> usize {
         count += 1;
     }
     return 1 << count;
+}
+
+fn log_2_of(num: usize) -> usize {
+    mem::size_of::<usize>() * 8 - num.leading_zeros() as usize - 1
 }
