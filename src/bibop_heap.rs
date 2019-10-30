@@ -1,14 +1,16 @@
 use super::*;
 use crate::collections::fixvec::FixedVec;
+use crate::collections::lfmap::Map;
 use crate::collections::{lflist, lfmap};
 use crate::generic_heap::ObjectMeta;
-use crate::utils::*;
-use core::mem::MaybeUninit;
-use core::mem;
 use crate::mmap::mmap_without_fd;
+use crate::utils::*;
+use core::mem;
+use core::mem::MaybeUninit;
 use core::sync::atomic::AtomicUsize;
-use crate::collections::lfmap::Map;
 use std::sync::atomic::Ordering::Relaxed;
+use std::cell::RefCell;
+use std::borrow::Borrow;
 
 const NUM_SIZE_CLASS: usize = 16;
 const CACHE_LINE_SIZE: usize = 64;
@@ -39,7 +41,7 @@ struct NodeMeta {
     alloc_pos: AtomicUsize,
     common_free: TSizeClassFreeList,
     pending_free: lflist::List,
-    objects: lfmap::ObjectMap<ObjectMeta>
+    objects: lfmap::ObjectMap<ObjectMeta>,
 }
 
 struct SizeClass {
@@ -50,12 +52,12 @@ struct SizeClass {
 }
 
 struct ReservedPage {
-    addr: AtomicUsize,
-    pos: AtomicUsize,
+    addr: RefCell<usize>,
+    pos: RefCell<usize>,
 }
 
 pub struct Heap {
-    addr: usize
+    addr: usize,
 }
 
 pub fn allocate(size: usize) -> Ptr {
@@ -79,18 +81,18 @@ pub fn allocate(size: usize) -> Ptr {
             return freed as Ptr;
         }
 
-
-        unimplemented!()
+        // finally, allocate from node memory space in the reservation station
+        size_class
+            .reserved
+            .allocate_for(size_class.size, &node.alloc_pos) as Ptr
     })
 }
 pub fn contains(ptr: Ptr) -> bool {
-    THREAD_META.with(|meta| {
-        unimplemented!()
-    })
+    THREAD_META.with(|meta| unimplemented!())
 }
 pub fn free(ptr: Ptr) -> bool {
     let addr = ptr as usize;
-    let current_node = THREAD_META.with(|meta| { meta.numa });
+    let current_node = THREAD_META.with(|meta| meta.numa);
     let node_id = addr_numa_id(addr);
     if node_id != current_node {
         // append address to remote node if this address does not belong to current node
@@ -102,14 +104,10 @@ pub fn free(ptr: Ptr) -> bool {
     unimplemented!()
 }
 pub fn meta_of(ptr: Ptr) -> Option<ObjectMeta> {
-    THREAD_META.with(|meta| {
-        unimplemented!()
-    })
+    THREAD_META.with(|meta| unimplemented!())
 }
 pub fn size_of(ptr: Ptr) -> Option<usize> {
-    THREAD_META.with(|meta| {
-        unimplemented!()
-    })
+    THREAD_META.with(|meta| unimplemented!())
 }
 
 impl ThreadMeta {
@@ -134,32 +132,54 @@ impl SizeClass {
         Self {
             size: tier,
             reserved: ReservedPage::new(),
-            free_list: lflist::List::new()
+            free_list: lflist::List::new(),
         }
     }
 }
 
 impl ReservedPage {
+    // ATTENTION:   all of the function call in this structure should be in a single thread
+    //              synchronization is not required, use RefCell for internal mutation
+
     pub fn new() -> Self {
         ReservedPage {
-            addr: AtomicUsize::new(0),
-            pos: AtomicUsize::new(0)
+            addr: RefCell::new(0),
+            pos: RefCell::new(0),
         }
     }
     pub fn take(&self, size: usize) -> Option<usize> {
+        debug_assert!(is_power_of_2(size));
         let page_size = *SYS_PAGE_SIZE;
-        if size >= page_size { return None; }
-        loop {
-            let addr = self.addr.load(Relaxed);
-            if addr == 0 { return None; }
-            let pos = self.pos.load(Relaxed);
-            if pos - addr > page_size { return None; }
-            if self.pos.compare_and_swap(pos, pos + size, Relaxed) == pos {
-                return Some(pos);
-            }
+        if size >= page_size {
+            return None;
+        }
+        let addr = *self.addr.borrow();
+        if addr == 0 {
+            return None;
+        }
+        let pos = *self.pos.borrow();
+        if pos - addr >= page_size {
+            return None;
+        }
+        *self.pos.borrow_mut() = pos + size;
+        return Some(pos);
+    }
+    pub fn allocate_for(&self, size: usize, bumper: &AtomicUsize) -> usize {
+        debug_assert!(is_power_of_2(size));
+        let page_size = *SYS_PAGE_SIZE;
+        if size >= page_size {
+            return bumper.fetch_add(size, Relaxed);
+        } else {
+            let mut addr = self.addr.borrow_mut();
+            let mut pos = self.pos.borrow_mut();
+            debug_assert!(*addr == 0 || *pos - *addr >= page_size,
+                          "only allocate when the reserved space is not enough");
+            let new_page_base = bumper.fetch_add(page_size, Relaxed);
+            *addr = new_page_base;
+            *pos = new_page_base + size;
+            return new_page_base;
         }
     }
-
 }
 
 impl NodeMeta {
@@ -185,29 +205,31 @@ fn gen_numa_node_list() -> FixedVec<NodeMeta> {
             alloc_pos: AtomicUsize::new(node_base),
             common_free: size_class_free_list(),
             pending_free: lflist::List::new(),
-            objects: lfmap::ObjectMap::with_capacity(512)
+            objects: lfmap::ObjectMap::with_capacity(512),
         };
     }
     return nodes;
 }
 
 fn size_classes() -> TSizeClasses {
-    let mut data: [MaybeUninit<SizeClass>; NUM_SIZE_CLASS] = unsafe { MaybeUninit::uninit().assume_init() };
+    let mut data: [MaybeUninit<SizeClass>; NUM_SIZE_CLASS] =
+        unsafe { MaybeUninit::uninit().assume_init() };
     let mut tier = 2;
     for elem in &mut data[..] {
         *elem = MaybeUninit::new(SizeClass::new(tier));
         tier *= 2;
-    };
+    }
     unsafe { mem::transmute::<_, TSizeClasses>(data) }
 }
 
 fn size_class_free_list() -> TSizeClassFreeList {
-    let mut data: [MaybeUninit<lflist::List>; NUM_SIZE_CLASS] = unsafe { MaybeUninit::uninit().assume_init() };
+    let mut data: [MaybeUninit<lflist::List>; NUM_SIZE_CLASS] =
+        unsafe { MaybeUninit::uninit().assume_init() };
     let mut tier = 2;
     for elem in &mut data[..] {
         *elem = MaybeUninit::new(lflist::List::new());
         tier *= 2;
-    };
+    }
     unsafe { mem::transmute::<_, TSizeClassFreeList>(data) }
 }
 
@@ -224,7 +246,9 @@ fn min_power_of_2(mut n: usize) -> usize {
     let mut count = 0;
     // First n in the below condition
     // is for the case where n is 0
-    if n > 0 && (n & (n - 1)) == 0 { return n; }
+    if n > 0 && (n & (n - 1)) == 0 {
+        return n;
+    }
     while n != 0 {
         n >>= 1;
         count += 1;
@@ -245,5 +269,9 @@ fn addr_numa_id(addr: usize) -> usize {
 #[inline]
 fn size_class_index_from_size(size: usize) -> usize {
     let log = log_2_of(size);
-    if is_power_of_2(size) { log - 1 } else { log }
+    if is_power_of_2(size) {
+        log - 1
+    } else {
+        log
+    }
 }
