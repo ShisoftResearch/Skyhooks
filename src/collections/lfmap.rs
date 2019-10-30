@@ -10,6 +10,7 @@ use core::ptr::NonNull;
 use core::sync::atomic::Ordering::{Acquire, Relaxed, Release, SeqCst};
 use core::sync::atomic::{fence, AtomicBool, AtomicPtr, AtomicUsize};
 use core::{intrinsics, mem, ptr};
+use crate::utils::is_power_of_2;
 use ModOp::Empty;
 
 pub type EntryTemplate = (usize, usize);
@@ -626,10 +627,6 @@ impl<V, A: Attachment<V>> ChunkRef<V, A> {
             ptr: 0 as *mut Chunk<V, A>,
         }
     }
-}
-
-fn is_power_of_2(x: usize) -> bool {
-    (x != 0) && ((x & (x - 1)) == 0)
 }
 
 #[inline(always)]

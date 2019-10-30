@@ -2,7 +2,7 @@ use super::*;
 use crate::collections::fixvec::FixedVec;
 use crate::collections::{lflist, lfmap};
 use crate::generic_heap::ObjectMeta;
-use crate::utils::{current_numa, current_thread_id, SYS_TOTAL_MEM, NUM_NUMA_NODES};
+use crate::utils::{current_numa, current_thread_id, SYS_TOTAL_MEM, NUM_NUMA_NODES, is_power_of_2};
 use core::mem::MaybeUninit;
 use core::mem;
 use crate::mmap::mmap_without_fd;
@@ -32,6 +32,7 @@ struct ThreadMeta {
 }
 
 struct NodeMeta {
+    id: usize,
     base: usize,
     alloc_pos: AtomicUsize,
     sizes: TSizeClasses,
@@ -57,6 +58,8 @@ pub struct Heap {
 
 pub fn allocate(size: usize) -> Ptr {
     THREAD_META.with(|meta| {
+        // allocate memory inside the thread meta
+
         unimplemented!()
     })
 }
@@ -66,9 +69,17 @@ pub fn contains(ptr: Ptr) -> bool {
     })
 }
 pub fn free(ptr: Ptr) -> bool {
-    THREAD_META.with(|meta| {
+    let addr = ptr as usize;
+    let current_node = THREAD_META.with(|meta| { meta.numa });
+    let node_id = addr_numa_id(addr);
+    if node_id != current_node {
+        // append address to remote node if this address does not belong to current node
+        let remote_node: &NodeMeta = &PER_NODE_META[node_id];
+        remote_node.append_free(addr);
+    } else {
         unimplemented!()
-    })
+    }
+    unimplemented!()
 }
 pub fn meta_of(ptr: Ptr) -> Option<ObjectMeta> {
     THREAD_META.with(|meta| {
@@ -117,6 +128,16 @@ impl ReservedPage {
     }
 }
 
+impl NodeMeta {
+    pub fn append_free(&self, addr: usize) {
+        // append freed object to this NUMA node, to be processed by this node
+        // this operation minimized communication cost by 4 atomic operations in common cases
+        // maybe 3 atomic operations after get rid of reference counting in lflist
+        debug_assert_eq!(self.id, addr_numa_id(addr));
+        self.pending_free.push(addr);
+    }
+}
+
 fn gen_numa_node_list() -> FixedVec<NodeMeta> {
     let num_nodes = *NUM_NUMA_NODES;
     let node_shift_bits = *NODE_SHIFT_BITS;
@@ -125,6 +146,7 @@ fn gen_numa_node_list() -> FixedVec<NodeMeta> {
     for i in 0..num_nodes {
         let node_base = heap_base + (i << node_shift_bits);
         nodes[i] = NodeMeta {
+            id: i,
             base: node_base,
             alloc_pos: AtomicUsize::new(node_base),
             sizes: size_classes(),
@@ -145,6 +167,7 @@ fn size_classes() -> TSizeClasses {
     unsafe { mem::transmute::<_, TSizeClasses>(data) }
 }
 
+#[inline]
 fn per_node_heap() -> usize {
     min_power_of_2(*SYS_TOTAL_MEM)
 }
@@ -165,6 +188,18 @@ fn min_power_of_2(mut n: usize) -> usize {
     return 1 << count;
 }
 
+#[inline]
 fn log_2_of(num: usize) -> usize {
     mem::size_of::<usize>() * 8 - num.leading_zeros() as usize - 1
+}
+
+#[inline]
+fn addr_numa_id(addr: usize) -> usize {
+    (addr - *HEAP_BASE) >> *NODE_SHIFT_BITS
+}
+
+#[inline]
+fn size_class_index_from_size(size: usize) -> usize {
+    let log = log_2_of(size);
+    if is_power_of_2(size) { log - 1 } else { log }
 }
