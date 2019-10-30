@@ -13,6 +13,8 @@ use alloc::vec::Vec;
 use core::alloc::{GlobalAlloc, Layout};
 use core::sync::atomic::Ordering::Relaxed;
 use core::sync::atomic::{AtomicUsize, Ordering};
+use crate::utils::align_padding;
+use core::mem;
 
 lazy_static! {
     static ref ALLOC_INNER: AllocatorInner = AllocatorInner::new();
@@ -32,7 +34,8 @@ fn allocate_address_space() -> Ptr {
 fn actual_size(layout: &Layout) -> usize {
     let size = layout.size();
     let align = layout.align();
-    layout.padding_needed_for(align) + size
+    let layout_aligned = layout.padding_needed_for(align) + size;
+    layout_aligned + align_padding(layout_aligned, mem::size_of::<usize>())
 }
 
 // dealloc address space only been used when CAS base failed
@@ -92,7 +95,8 @@ unsafe impl GlobalAlloc for AllocatorInner {
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         // use system call to invalidate underlying physical memory (pages)
         debug!("Dealloc {}", ptr as usize);
-        dealloc_regional(ptr as Ptr, actual_size(&layout));
+        let size = actual_size(&layout);
+        dealloc_regional(ptr as Ptr, size);
     }
 }
 

@@ -30,5 +30,5 @@ use crate::bump_heap::BumpAllocator;
 use core::alloc::{GlobalAlloc, Layout};
 use core::ffi::c_void;
 
-//#[global_allocator]
-//static GLOBAL: BumpAllocator = BumpAllocator;
+#[global_allocator]
+static GLOBAL: BumpAllocator = BumpAllocator;
