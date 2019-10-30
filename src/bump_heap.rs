@@ -31,13 +31,6 @@ fn allocate_address_space() -> Ptr {
     mmap_without_fd(HEAP_VIRT_SIZE)
 }
 
-fn actual_size(layout: &Layout) -> usize {
-    let size = layout.size();
-    let align = layout.align();
-    let layout_aligned = layout.padding_needed_for(align) + size;
-    layout_aligned + align_padding(layout_aligned, mem::size_of::<usize>())
-}
-
 // dealloc address space only been used when CAS base failed
 // Even noop will be fine, we still want to return the space the the OS because we can
 fn dealloc_address_space(address: Ptr) {
@@ -56,11 +49,12 @@ impl AllocatorInner {
 
 unsafe impl GlobalAlloc for AllocatorInner {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let actual_size = actual_size(&layout);
-        debug!("Allocate {}", actual_size);
+        let align = layout.align();
         loop {
             let addr = self.addr.load(Relaxed);
             let current_tail = self.tail.load(Relaxed);
+            let tail_align_padding = align_padding(current_tail, align);
+            let actual_size = layout.size() + tail_align_padding;
             let new_tail = current_tail + actual_size;
             if new_tail > addr + HEAP_VIRT_SIZE {
                 // may overflow the address space, need to allocate another address space
@@ -86,7 +80,7 @@ unsafe impl GlobalAlloc for AllocatorInner {
                 .compare_and_swap(current_tail, new_tail, Ordering::Relaxed)
                 == current_tail
             {
-                return current_tail as *mut u8;
+                return (current_tail + tail_align_padding) as *mut u8;
             }
             // CAS tail failed, retry
         }
@@ -95,8 +89,7 @@ unsafe impl GlobalAlloc for AllocatorInner {
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         // use system call to invalidate underlying physical memory (pages)
         debug!("Dealloc {}", ptr as usize);
-        let size = actual_size(&layout);
-        dealloc_regional(ptr as Ptr, size);
+        dealloc_regional(ptr as Ptr, layout.size());
     }
 }
 
