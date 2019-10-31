@@ -89,6 +89,21 @@ impl <T>List<T> {
             return Some(unsafe { ptr::read(new_pos as *mut T) });
         }
     }
+    pub fn drop_out_all(&self) -> Vec<T> {
+        let new_head_buffer = BufferMeta::new();
+        let mut buffer_ptr = self.head.swap(new_head_buffer, Relaxed);
+        let mut res = vec![];
+        while buffer_ptr != null_buffer() {
+            let buffer = unsafe { &*buffer_ptr };
+            while buffer.refs.load(Relaxed) > 1 {} //wait until reference counter reach 1
+            res.append(&mut BufferMeta::flush_buffer(buffer));
+            let next_ptr = buffer.next.load(Relaxed);
+            BufferMeta::mark_garbage(buffer_ptr);
+            buffer_ptr = next_ptr;
+        }
+        self.count.fetch_sub(res.len(), Relaxed);
+        return res;
+    }
     pub fn count(&self) -> usize { self.count.load(Relaxed) }
 }
 
@@ -135,17 +150,24 @@ impl <T> BufferMeta <T> {
             if buffer.refs.compare_and_swap(0, std::usize::MAX, Relaxed) != 0 {
                 return;
             }
-            let size_of_obj = mem::size_of::<T>();
-            let mut addr = buffer.lower_bound;
-            let data_bound = buffer.head.load(Relaxed);
-            while addr < data_bound {
-                let ptr = addr as *mut T;
-                let obj = unsafe { ptr::read(ptr) };
-                drop(obj);
-                addr += size_of_obj;
-            }
+            for obj in Self::flush_buffer(buffer) { drop(obj) }
         }
         dealloc_mem::<usize>(buffer as usize, *SYS_PAGE_SIZE)
+    }
+
+    fn flush_buffer(buffer: &BufferMeta<T>) -> Vec<T> {
+        let size_of_obj = mem::size_of::<T>();
+        let mut addr = buffer.lower_bound;
+        let data_bound = buffer.head.load(Relaxed);
+        let mut res = vec![];
+        while addr < data_bound {
+            let ptr = addr as *mut T;
+            let obj = unsafe { ptr::read(ptr) };
+            res.push(obj);
+            addr += size_of_obj;
+        }
+        buffer.head.store(buffer.lower_bound, Relaxed);
+        return res;
     }
 
     fn borrow(buffer: *mut BufferMeta<T>) -> BufferRef<T> {
@@ -205,6 +227,8 @@ mod test {
         list.push(32);
         list.push(25);
         assert_eq!(list.count(), 2);
+        assert_eq!(list.drop_out_all(), vec![32, 25]);
+        assert_eq!(list.count(), 0);
     }
 
     #[test]
