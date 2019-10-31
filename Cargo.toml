@@ -13,6 +13,7 @@ lazy_static = { version = "*" }
 regex = "*"
 num_cpus = "1.0"
 sysinfo = "*"
+lfmap = { git = "https://github.com/shisoft/lfmap.rs", branch = "develop" }
 
 [dev-dependencies]
 env_logger = "0.7.1"

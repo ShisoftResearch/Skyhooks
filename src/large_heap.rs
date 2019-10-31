@@ -1,5 +1,5 @@
 use super::*;
-use crate::collections::lfmap::{Map, ObjectMap};
+use lfmap::{Map, ObjectMap};
 use crate::generic_heap::ObjectMeta;
 use crate::mmap::mmap_without_fd;
 use crate::utils::*;

@@ -1,7 +1,7 @@
 use super::*;
 use crate::collections::fixvec::FixedVec;
-use crate::collections::lfmap::Map;
-use crate::collections::{lflist, lfmap};
+use lfmap::Map;
+use crate::collections::{lflist};
 use crate::generic_heap::ObjectMeta;
 use crate::mmap::mmap_without_fd;
 use crate::utils::*;
