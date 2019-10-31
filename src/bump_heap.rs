@@ -8,12 +8,12 @@
 // memory space immediately. It is very unsafe.
 
 use crate::mmap::{dealloc_regional, mmap_without_fd, munmap_memory};
+use crate::utils::*;
 use crate::Ptr;
 use alloc::vec::Vec;
 use core::alloc::{GlobalAlloc, Layout};
 use core::sync::atomic::Ordering::Relaxed;
 use core::sync::atomic::{AtomicUsize, Ordering};
-use crate::utils::*;
 use core::{mem, ptr};
 
 lazy_static! {
@@ -27,7 +27,7 @@ pub struct AllocatorInner {
 
 struct Object {
     start: usize,
-    size: usize
+    size: usize,
 }
 
 const HEAP_VIRT_SIZE: usize = 2 * 1024 * 1024 * 1024; // 2GB
@@ -55,7 +55,9 @@ impl AllocatorInner {
 unsafe impl GlobalAlloc for AllocatorInner {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let mut align = layout.align();
-        if align < 8 { align = 8; }
+        if align < 8 {
+            align = 8;
+        }
         let word_size = mem::size_of::<usize>();
         loop {
             let addr = self.addr.load(Relaxed);
@@ -89,7 +91,9 @@ unsafe impl GlobalAlloc for AllocatorInner {
                 == current_tail
             {
                 let meta_loc = current_tail + tail_align_padding;
-                unsafe { ptr::write(meta_loc as *mut usize, current_tail); }
+                unsafe {
+                    ptr::write(meta_loc as *mut usize, current_tail);
+                }
                 debug_assert!(current_tail > 0);
                 let final_addr = current_tail + word_size + tail_align_padding;
                 debug_assert!(final_addr > addr);
@@ -103,7 +107,9 @@ unsafe impl GlobalAlloc for AllocatorInner {
         // use system call to invalidate underlying physical memory (pages)
         debug!("Dealloc {}", ptr as usize);
         // Will not dealloc objects smaller than half page size
-        if layout.size() < (*SYS_PAGE_SIZE >> 1) { return; }
+        if layout.size() < (*SYS_PAGE_SIZE >> 1) {
+            return;
+        }
         let word = mem::size_of::<usize>();
         let ptr_pos = ptr as usize;
         let start_pos = ptr_pos - mem::size_of::<usize>();

@@ -1,12 +1,12 @@
+use crate::bump_heap::BumpAllocator;
+use core::alloc::{GlobalAlloc, Layout};
+use core::mem;
 use libc::{syscall, sysconf, _SC_PAGESIZE};
 use regex::Regex;
 use std::collections::HashMap;
 use std::fs::{read_dir, ReadDir};
 use std::io::Error;
 use sysinfo::{ProcessExt, SystemExt};
-use core::mem;
-use crate::bump_heap::BumpAllocator;
-use core::alloc::{GlobalAlloc, Layout};
 
 lazy_static! {
     pub static ref SYS_PAGE_SIZE: usize = unsafe { sysconf(_SC_PAGESIZE) as usize };

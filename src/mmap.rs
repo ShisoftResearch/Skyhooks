@@ -28,7 +28,6 @@ pub fn munmap_memory(address: Ptr, size: usize) {
     }
 }
 
-
 #[cfg(target_os = "linux")]
 #[inline(always)]
 pub fn no_huge_page(ptr: Ptr, size: usize) {

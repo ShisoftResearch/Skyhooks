@@ -1,18 +1,18 @@
 use super::*;
 use crate::collections::fixvec::FixedVec;
-use lfmap::Map;
-use crate::collections::{lflist};
+use crate::collections::lflist;
 use crate::generic_heap::ObjectMeta;
 use crate::mmap::mmap_without_fd;
 use crate::utils::*;
 use core::mem;
 use core::mem::MaybeUninit;
 use core::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering::Relaxed;
-use std::cell::RefCell;
-use std::borrow::Borrow;
-use std::collections::LinkedList;
 use crossbeam_queue::{ArrayQueue, PushError, SegQueue};
+use lfmap::Map;
+use std::borrow::Borrow;
+use std::cell::RefCell;
+use std::collections::LinkedList;
+use std::sync::atomic::Ordering::Relaxed;
 
 const NUM_SIZE_CLASS: usize = 16;
 const CACHE_LINE_SIZE: usize = 64;
@@ -172,7 +172,12 @@ impl ReservedPage {
         *self.pos.borrow_mut() = pos + size;
         return Some(pos);
     }
-    pub fn allocate_from_common(&self, size: usize, size_class_index: usize, node: &NodeMeta) -> usize {
+    pub fn allocate_from_common(
+        &self,
+        size: usize,
+        size_class_index: usize,
+        node: &NodeMeta,
+    ) -> usize {
         debug_assert!(is_power_of_2(size));
         let page_size = *SYS_PAGE_SIZE;
         let bumper = &node.alloc_pos;
@@ -181,8 +186,10 @@ impl ReservedPage {
         }
         let mut addr = self.addr.borrow_mut();
         let mut pos = self.pos.borrow_mut();
-        debug_assert!(*addr == 0 || *pos - *addr >= page_size,
-                      "only allocate when the reserved space is not enough");
+        debug_assert!(
+            *addr == 0 || *pos - *addr >= page_size,
+            "only allocate when the reserved space is not enough"
+        );
         if let Ok(reserved) = node.common[size_class_index].reserved.pop() {
             let old_reserved_pos = *reserved.pos.borrow();
             *addr = *(reserved.addr.borrow());
@@ -244,7 +251,7 @@ fn common_size_classes() -> TCommonSizeClasses {
         *elem = MaybeUninit::new(CommonSizeClass {
             size: tier,
             reserved: SegQueue::new(),
-            free_list: lflist::List::new()
+            free_list: lflist::List::new(),
         });
         tier *= 2;
     }

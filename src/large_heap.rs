@@ -1,9 +1,9 @@
 use super::*;
-use lfmap::{Map, ObjectMap};
 use crate::generic_heap::ObjectMeta;
 use crate::mmap::mmap_without_fd;
 use crate::utils::*;
 use core::mem;
+use lfmap::{Map, ObjectMap};
 use mmap::munmap_memory;
 
 // Heap for large objects exceeds maximum tier of pages

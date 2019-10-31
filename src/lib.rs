@@ -11,11 +11,11 @@ extern crate log;
 extern crate libc;
 
 mod api;
-mod small_heap;
 mod bump_heap;
 mod generic_heap;
 mod large_heap;
 mod mmap;
+mod small_heap;
 mod utils;
 
 mod collections;
