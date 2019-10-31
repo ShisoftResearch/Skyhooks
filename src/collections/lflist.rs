@@ -32,9 +32,10 @@ impl <T>List<T> {
 
     pub fn push(&self, item: T) {
         let mut pos = 0;
+        let mut page;
         loop {
             let head_ptr = self.head.load(Relaxed);
-            let page = BufferMeta::borrow(head_ptr);
+            page = BufferMeta::borrow(head_ptr);
             pos = page.head.load(Relaxed);
             let next_pos = pos + mem::size_of::<T>();
             if next_pos > page.upper_bound {
@@ -60,9 +61,10 @@ impl <T>List<T> {
     }
 
     pub fn pop(&self) -> Option<T> {
+        let mut page;
         loop {
             let head_ptr = self.head.load(Relaxed);
-            let page = BufferMeta::borrow(head_ptr);
+            page = BufferMeta::borrow(head_ptr);
             let pos = page.head.load(Relaxed);
             let new_pos = pos - mem::size_of::<T>();
             if pos == page.lower_bound && page.next.load(Relaxed) == null_buffer() {
