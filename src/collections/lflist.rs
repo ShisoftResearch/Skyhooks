@@ -18,6 +18,7 @@ struct BufferMeta<T> {
 
 pub struct List<T> {
     head: AtomicPtr<BufferMeta<T>>,
+    count: AtomicUsize
 }
 
 impl <T>List<T> {
@@ -25,6 +26,7 @@ impl <T>List<T> {
         let first_buffer = BufferMeta::new();
         Self {
             head: AtomicPtr::new(first_buffer),
+            count: AtomicUsize::new(0)
         }
     }
 
@@ -54,6 +56,7 @@ impl <T>List<T> {
         }
         let ptr = pos as *mut T;
         unsafe { ptr::write(ptr, item); }
+        self.count.fetch_add(1, Relaxed);
     }
 
     pub fn pop(&self) -> Option<T> {
@@ -82,9 +85,11 @@ impl <T>List<T> {
                 // cannot swap head
                 continue;
             }
+            self.count.fetch_sub(1, Relaxed);
             return Some(unsafe { ptr::read(new_pos as *mut T) });
         }
     }
+    pub fn count(&self) -> usize { self.count.load(Relaxed) }
 }
 
 impl <T> Drop for List<T> {
@@ -199,6 +204,7 @@ mod test {
         }
         list.push(32);
         list.push(25);
+        assert_eq!(list.count(), 2);
     }
 
     #[test]
