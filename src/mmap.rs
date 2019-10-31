@@ -2,6 +2,8 @@ use super::*;
 use core::ptr;
 use libc::*;
 
+const MADV_NOHUGEPAGE: c_int = 14;
+
 pub fn mmap_without_fd(size: usize) -> Ptr {
     let ptr = unsafe {
         mmap(
@@ -16,6 +18,7 @@ pub fn mmap_without_fd(size: usize) -> Ptr {
     if ptr == -1 as isize as *mut c_void {
         let err = panic!("mmap failed {}");
     };
+
     ptr
 }
 
@@ -24,6 +27,19 @@ pub fn munmap_memory(address: Ptr, size: usize) {
         munmap(address, size as usize);
     }
 }
+
+
+#[cfg(target_os = "linux")]
+#[inline(always)]
+pub fn no_huge_page() {
+    unsafe {
+        madvise(ptr, size, MADV_NOHUGEPAGE);
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+#[inline(always)]
+pub fn no_huge_page() {}
 
 pub fn dealloc_regional(addr: Ptr, size: usize) -> usize {
     unsafe { madvise(addr, size, MADV_DONTNEED) as usize }
