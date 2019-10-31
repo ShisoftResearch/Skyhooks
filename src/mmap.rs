@@ -18,7 +18,7 @@ pub fn mmap_without_fd(size: usize) -> Ptr {
     if ptr == -1 as isize as *mut c_void {
         let err = panic!("mmap failed {}");
     };
-
+    no_huge_page(ptr, size);
     ptr
 }
 
@@ -31,7 +31,7 @@ pub fn munmap_memory(address: Ptr, size: usize) {
 
 #[cfg(target_os = "linux")]
 #[inline(always)]
-pub fn no_huge_page() {
+pub fn no_huge_page(ptr: Ptr, size: usize) {
     unsafe {
         madvise(ptr, size, MADV_NOHUGEPAGE);
     }
@@ -39,7 +39,7 @@ pub fn no_huge_page() {
 
 #[cfg(not(target_os = "linux"))]
 #[inline(always)]
-pub fn no_huge_page() {}
+pub fn no_huge_page(ptr: Ptr, size: usize) {}
 
 pub fn dealloc_regional(addr: Ptr, size: usize) -> usize {
     unsafe { madvise(addr, size, MADV_DONTNEED) as usize }
