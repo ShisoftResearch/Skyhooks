@@ -12,12 +12,13 @@ use std::sync::atomic::Ordering::Relaxed;
 use std::cell::RefCell;
 use std::borrow::Borrow;
 use std::collections::LinkedList;
+use crossbeam_queue::{ArrayQueue, PushError, SegQueue};
 
 const NUM_SIZE_CLASS: usize = 16;
 const CACHE_LINE_SIZE: usize = 64;
 
 type TSizeClasses = [SizeClass; NUM_SIZE_CLASS];
-type TSizeClassFreeList = [lflist::List; NUM_SIZE_CLASS];
+type TCommonSizeClasses = [CommonSizeClass; NUM_SIZE_CLASS];
 
 thread_local! {
     static THREAD_META: ThreadMeta = ThreadMeta::new()
@@ -40,15 +41,21 @@ struct NodeMeta {
     id: usize,
     base: usize,
     alloc_pos: AtomicUsize,
-    common_free: TSizeClassFreeList,
+    common: TCommonSizeClasses,
     pending_free: lflist::List,
-    objects: lfmap::ObjectMap<ObjectMeta>,
 }
 
 struct SizeClass {
     size: usize,
     // reserved page for every size class to ensure utilization
     reserved: ReservedPage,
+    free_list: lflist::List,
+}
+
+struct CommonSizeClass {
+    size: usize,
+    // unused up reserves from dead threads
+    reserved: SegQueue<ReservedPage>,
     free_list: lflist::List,
 }
 
@@ -78,14 +85,14 @@ pub fn allocate(size: usize) -> Ptr {
 
         // allocate from node common list
         let node = &PER_NODE_META[meta.numa];
-        if let Some(freed) = node.common_free[size_class_index].pop() {
+        if let Some(freed) = node.common[size_class_index].free_list.pop() {
             return freed as Ptr;
         }
 
         // finally, allocate from node memory space in the reservation station
         size_class
             .reserved
-            .allocate_for(size_class.size, &node.alloc_pos) as Ptr
+            .allocate_from_common(size_class.size, size_class_index, &node) as Ptr
     })
 }
 pub fn contains(ptr: Ptr) -> bool {
@@ -165,20 +172,27 @@ impl ReservedPage {
         *self.pos.borrow_mut() = pos + size;
         return Some(pos);
     }
-    pub fn allocate_for(&self, size: usize, bumper: &AtomicUsize) -> usize {
+    pub fn allocate_from_common(&self, size: usize, size_class_index: usize, node: &NodeMeta) -> usize {
         debug_assert!(is_power_of_2(size));
         let page_size = *SYS_PAGE_SIZE;
+        let bumper = &node.alloc_pos;
         if size >= page_size {
             return bumper.fetch_add(size, Relaxed);
+        }
+        let mut addr = self.addr.borrow_mut();
+        let mut pos = self.pos.borrow_mut();
+        debug_assert!(*addr == 0 || *pos - *addr >= page_size,
+                      "only allocate when the reserved space is not enough");
+        if let Ok(reserved) = node.common[size_class_index].reserved.pop() {
+            let old_reserved_pos = *reserved.pos.borrow();
+            *addr = *(reserved.addr.borrow());
+            *pos = old_reserved_pos + size;
+            return old_reserved_pos;
         } else {
-            let mut addr = self.addr.borrow_mut();
-            let mut pos = self.pos.borrow_mut();
-            debug_assert!(*addr == 0 || *pos - *addr >= page_size,
-                          "only allocate when the reserved space is not enough");
             let new_page_base = bumper.fetch_add(page_size, Relaxed);
             *addr = new_page_base;
             *pos = new_page_base + size;
-            return new_page_base;
+            return *addr;
         }
     }
 }
@@ -204,9 +218,8 @@ fn gen_numa_node_list() -> FixedVec<NodeMeta> {
             id: i,
             base: node_base,
             alloc_pos: AtomicUsize::new(node_base),
-            common_free: size_class_free_list(),
+            common: common_size_classes(),
             pending_free: lflist::List::new(),
-            objects: lfmap::ObjectMap::with_capacity(512),
         };
     }
     return nodes;
@@ -223,15 +236,19 @@ fn size_classes() -> TSizeClasses {
     unsafe { mem::transmute::<_, TSizeClasses>(data) }
 }
 
-fn size_class_free_list() -> TSizeClassFreeList {
-    let mut data: [MaybeUninit<lflist::List>; NUM_SIZE_CLASS] =
+fn common_size_classes() -> TCommonSizeClasses {
+    let mut data: [MaybeUninit<CommonSizeClass>; NUM_SIZE_CLASS] =
         unsafe { MaybeUninit::uninit().assume_init() };
     let mut tier = 2;
     for elem in &mut data[..] {
-        *elem = MaybeUninit::new(lflist::List::new());
+        *elem = MaybeUninit::new(CommonSizeClass {
+            size: tier,
+            reserved: SegQueue::new(),
+            free_list: lflist::List::new()
+        });
         tier *= 2;
     }
-    unsafe { mem::transmute::<_, TSizeClassFreeList>(data) }
+    unsafe { mem::transmute::<_, TCommonSizeClasses>(data) }
 }
 
 #[inline]
