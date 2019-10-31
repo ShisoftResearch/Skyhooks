@@ -2,3 +2,4 @@
 
 pub mod fixvec;
 pub mod lflist;
+pub mod envmap;

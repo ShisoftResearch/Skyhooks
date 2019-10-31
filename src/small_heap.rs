@@ -42,21 +42,21 @@ struct NodeMeta {
     base: usize,
     alloc_pos: AtomicUsize,
     common: TCommonSizeClasses,
-    pending_free: lflist::List,
+    pending_free: lflist::List<usize>,
 }
 
 struct SizeClass {
     size: usize,
     // reserved page for every size class to ensure utilization
     reserved: ReservedPage,
-    free_list: lflist::List,
+    free_list: lflist::List<usize>,
 }
 
 struct CommonSizeClass {
     size: usize,
     // unused up reserves from dead threads
     reserved: SegQueue<ReservedPage>,
-    free_list: lflist::List,
+    free_list: lflist::List<usize>,
 }
 
 struct ReservedPage {
@@ -190,6 +190,7 @@ impl ReservedPage {
             *addr == 0 || *pos - *addr >= page_size,
             "only allocate when the reserved space is not enough"
         );
+
         if let Ok(reserved) = node.common[size_class_index].reserved.pop() {
             let old_reserved_pos = *reserved.pos.borrow();
             *addr = *(reserved.addr.borrow());

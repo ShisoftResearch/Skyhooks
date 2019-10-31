@@ -6,22 +6,21 @@ use core::{intrinsics, mem};
 use std::ops::Deref;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicPtr, AtomicUsize};
+use core::ptr;
 
-const NULL_BUFFER: *mut BufferMeta = 0 as *mut BufferMeta;
-
-struct BufferMeta {
+struct BufferMeta<T> {
     head: AtomicUsize,
-    next: AtomicPtr<BufferMeta>,
+    next: AtomicPtr<BufferMeta<T>>,
     refs: AtomicUsize,
     upper_bound: usize,
     lower_bound: usize,
 }
 
-pub struct List {
-    head: AtomicPtr<BufferMeta>,
+pub struct List<T> {
+    head: AtomicPtr<BufferMeta<T>>,
 }
 
-impl List {
+impl <T>List<T> {
     pub fn new() -> Self {
         let first_buffer = BufferMeta::new();
         Self {
@@ -29,12 +28,13 @@ impl List {
         }
     }
 
-    pub fn push(&self, item: usize) {
+    pub fn push(&self, item: T) {
+        let mut pos = 0;
         loop {
             let head_ptr = self.head.load(Relaxed);
             let page = BufferMeta::borrow(head_ptr);
-            let pos = page.head.load(Relaxed);
-            let next_pos = pos + mem::size_of::<usize>();
+            pos = page.head.load(Relaxed);
+            let next_pos = pos + mem::size_of::<T>();
             if next_pos > page.upper_bound {
                 // buffer overflow, make new and link to last buffer
                 let new_head = BufferMeta::new();
@@ -48,31 +48,28 @@ impl List {
                 continue;
             } else {
                 if page.head.compare_and_swap(pos, next_pos, Relaxed) == pos {
-                    let ptr = pos as *mut usize;
-                    if unsafe { intrinsics::atomic_xchg_relaxed(ptr, item) } == 0 {
-                        return;
-                    } else {
-                        unreachable!()
-                    }
+                    break;
                 }
             }
         }
+        let ptr = pos as *mut T;
+        unsafe { ptr::write(ptr, item); }
     }
 
-    pub fn pop(&self) -> Option<usize> {
+    pub fn pop(&self) -> Option<T> {
         loop {
             let head_ptr = self.head.load(Relaxed);
             let page = BufferMeta::borrow(head_ptr);
             let pos = page.head.load(Relaxed);
-            let new_pos = pos - mem::size_of::<usize>();
-            if pos == page.lower_bound && page.next.load(Relaxed) == NULL_BUFFER {
+            let new_pos = pos - mem::size_of::<T>();
+            if pos == page.lower_bound && page.next.load(Relaxed) == null_buffer() {
                 // empty buffer chain
                 return None;
             }
             if pos == page.lower_bound {
                 // last item, need to remove this head and swap to the next one
                 let next = page.next.load(Relaxed);
-                if next != NULL_BUFFER {
+                if next != null_buffer() {
                     if self.head.compare_and_swap(head_ptr, next, Relaxed) == head_ptr {
                         BufferMeta::mark_garbage(head_ptr);
                     }
@@ -85,14 +82,12 @@ impl List {
                 // cannot swap head
                 continue;
             }
-            let res = unsafe { intrinsics::atomic_xchg_relaxed(new_pos as *mut usize, 0) };
-            assert_ne!(res, 0, "return empty");
-            return Some(res);
+            return Some(unsafe { ptr::read(new_pos as *mut T) });
         }
     }
 }
 
-impl Drop for List {
+impl <T> Drop for List<T> {
     fn drop(&mut self) {
         unsafe {
             let mut node_ptr = self.head.load(Relaxed);
@@ -105,15 +100,15 @@ impl Drop for List {
     }
 }
 
-impl BufferMeta {
-    pub fn new() -> *mut BufferMeta {
+impl <T> BufferMeta <T> {
+    pub fn new() -> *mut BufferMeta<T> {
         let page_size = *SYS_PAGE_SIZE;
-        let head_page = alloc_mem::<usize>(page_size) as *mut BufferMeta;
+        let head_page = alloc_mem::<usize>(page_size) as *mut BufferMeta<T>;
         let head_page_address = head_page as usize;
-        let start = head_page_address + mem::size_of::<BufferMeta>();
+        let start = head_page_address + mem::size_of::<BufferMeta<T>>();
         *(unsafe { &mut *head_page }) = Self {
             head: AtomicUsize::new(start),
-            next: AtomicPtr::new(NULL_BUFFER),
+            next: AtomicPtr::new(null_buffer()),
             refs: AtomicUsize::new(1),
             upper_bound: head_page_address + page_size,
             lower_bound: start,
@@ -121,7 +116,7 @@ impl BufferMeta {
         head_page
     }
 
-    pub fn mark_garbage(buffer: *mut BufferMeta) {
+    pub fn mark_garbage(buffer: *mut BufferMeta<T>) {
         {
             let buffer = unsafe { &*buffer };
             buffer.refs.fetch_sub(1, Relaxed);
@@ -129,17 +124,26 @@ impl BufferMeta {
         Self::check_gc(buffer);
     }
 
-    fn check_gc(buffer: *mut BufferMeta) {
+    fn check_gc(buffer: *mut BufferMeta<T>) {
         {
             let buffer = unsafe { &*buffer };
             if buffer.refs.compare_and_swap(0, std::usize::MAX, Relaxed) != 0 {
                 return;
             }
+            let size_of_obj = mem::size_of::<T>();
+            let mut addr = buffer.lower_bound;
+            let data_bound = buffer.head.load(Relaxed);
+            while addr < data_bound {
+                let ptr = addr as *mut T;
+                let obj = unsafe { ptr::read(ptr) };
+                drop(obj);
+                addr += size_of_obj;
+            }
         }
         dealloc_mem::<usize>(buffer as usize, *SYS_PAGE_SIZE)
     }
 
-    fn borrow(buffer: *mut BufferMeta) -> BufferRef {
+    fn borrow(buffer: *mut BufferMeta<T>) -> BufferRef<T> {
         {
             let buffer = unsafe { &*buffer };
             buffer.refs.fetch_add(1, Relaxed);
@@ -148,11 +152,11 @@ impl BufferMeta {
     }
 }
 
-struct BufferRef {
-    ptr: *mut BufferMeta,
+struct BufferRef<T> {
+    ptr: *mut BufferMeta<T>,
 }
 
-impl Drop for BufferRef {
+impl <T> Drop for BufferRef<T> {
     fn drop(&mut self) {
         {
             let buffer = unsafe { &*self.ptr };
@@ -162,13 +166,16 @@ impl Drop for BufferRef {
     }
 }
 
-impl Deref for BufferRef {
-    type Target = BufferMeta;
+impl <T> Deref for BufferRef<T> {
+    type Target = BufferMeta<T>;
 
     fn deref(&self) -> &Self::Target {
         unsafe { &*self.ptr }
     }
 }
+
+#[inline(always)]
+fn null_buffer<T>() -> *mut BufferMeta<T> { 0 as *mut BufferMeta<T> }
 
 #[cfg(test)]
 mod test {
@@ -190,6 +197,8 @@ mod test {
         for i in 2..page_size {
             assert_eq!(list.pop(), None);
         }
+        list.push(32);
+        list.push(25);
     }
 
     #[test]
