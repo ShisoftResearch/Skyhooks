@@ -14,7 +14,7 @@ use core::alloc::{GlobalAlloc, Layout};
 use core::sync::atomic::Ordering::Relaxed;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use crate::utils::align_padding;
-use core::mem;
+use core::{mem, ptr};
 
 lazy_static! {
     static ref ALLOC_INNER: AllocatorInner = AllocatorInner::new();
@@ -23,6 +23,11 @@ lazy_static! {
 pub struct AllocatorInner {
     tail: AtomicUsize,
     addr: AtomicUsize,
+}
+
+struct Object {
+    start: usize,
+    size: usize
 }
 
 const HEAP_VIRT_SIZE: usize = 2 * 1024 * 1024 * 1024; // 2GB
@@ -49,12 +54,15 @@ impl AllocatorInner {
 
 unsafe impl GlobalAlloc for AllocatorInner {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let align = layout.align();
+        let mut align = layout.align();
+        if align < 8 { align = 8; }
+        let word_size = mem::size_of::<usize>();
         loop {
             let addr = self.addr.load(Relaxed);
             let current_tail = self.tail.load(Relaxed);
-            let tail_align_padding = align_padding(current_tail, align);
-            let actual_size = layout.size() + tail_align_padding;
+            let current_tail_with_start = current_tail + word_size;
+            let tail_align_padding = align_padding(current_tail_with_start, align);
+            let actual_size = layout.size() + word_size + tail_align_padding;
             let new_tail = current_tail + actual_size;
             if new_tail > addr + HEAP_VIRT_SIZE {
                 // may overflow the address space, need to allocate another address space
@@ -80,7 +88,9 @@ unsafe impl GlobalAlloc for AllocatorInner {
                 .compare_and_swap(current_tail, new_tail, Ordering::Relaxed)
                 == current_tail
             {
-                return (current_tail + tail_align_padding) as *mut u8;
+                let meta_loc = current_tail + tail_align_padding;
+                unsafe { ptr::write_unaligned(meta_loc as *mut usize, current_tail); }
+                return (current_tail + word_size + tail_align_padding) as *mut u8;
             }
             // CAS tail failed, retry
         }
@@ -89,7 +99,11 @@ unsafe impl GlobalAlloc for AllocatorInner {
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         // use system call to invalidate underlying physical memory (pages)
         debug!("Dealloc {}", ptr as usize);
-        dealloc_regional(ptr as Ptr, layout.size());
+        let ptr_pos = ptr as usize;
+        let start_pos = ptr_pos - mem::size_of::<usize>();
+        let starts = ptr::read_unaligned(start_pos as *const usize);
+        let padding = ptr_pos - starts;
+        dealloc_regional(starts as Ptr, layout.size() + padding);
     }
 }
 
