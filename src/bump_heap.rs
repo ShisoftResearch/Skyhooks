@@ -13,7 +13,7 @@ use alloc::vec::Vec;
 use core::alloc::{GlobalAlloc, Layout};
 use core::sync::atomic::Ordering::Relaxed;
 use core::sync::atomic::{AtomicUsize, Ordering};
-use crate::utils::align_padding;
+use crate::utils::*;
 use core::{mem, ptr};
 
 lazy_static! {
@@ -89,8 +89,11 @@ unsafe impl GlobalAlloc for AllocatorInner {
                 == current_tail
             {
                 let meta_loc = current_tail + tail_align_padding;
-                unsafe { ptr::write_unaligned(meta_loc as *mut usize, current_tail); }
-                return (current_tail + word_size + tail_align_padding) as *mut u8;
+                unsafe { ptr::write(meta_loc as *mut usize, current_tail); }
+                debug_assert!(current_tail > 0);
+                let final_addr = current_tail + word_size + tail_align_padding;
+                debug_assert!(final_addr > addr);
+                return final_addr as *mut u8;
             }
             // CAS tail failed, retry
         }
@@ -99,10 +102,14 @@ unsafe impl GlobalAlloc for AllocatorInner {
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         // use system call to invalidate underlying physical memory (pages)
         debug!("Dealloc {}", ptr as usize);
+        // Will not dealloc objects smaller than half page size
+        if layout.size() < (*SYS_PAGE_SIZE >> 1) { return; }
+        let word = mem::size_of::<usize>();
         let ptr_pos = ptr as usize;
         let start_pos = ptr_pos - mem::size_of::<usize>();
-        let starts = ptr::read_unaligned(start_pos as *const usize);
+        let starts = ptr::read(start_pos as *const usize);
         let padding = ptr_pos - starts;
+        debug_assert!(starts >= self.addr.load(Relaxed));
         dealloc_regional(starts as Ptr, layout.size() + padding);
     }
 }
