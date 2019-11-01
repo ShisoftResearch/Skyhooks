@@ -95,11 +95,21 @@ impl <T>List<T> {
         let new_head_buffer = BufferMeta::new();
         let mut buffer_ptr = self.head.swap(new_head_buffer, Relaxed);
         let mut res = vec![];
-        while buffer_ptr != null_buffer() {
-            let buffer = unsafe { &*buffer_ptr };
-            while buffer.refs.load(Relaxed) > 1 {} //wait until reference counter reach 1
-            res.append(&mut BufferMeta::flush_buffer(buffer));
+        'main: while buffer_ptr != null_buffer() {
+            let buffer = BufferMeta::borrow(buffer_ptr);
             let next_ptr = buffer.next.load(Relaxed);
+            loop {
+                //wait until reference counter reach 2 (one for not garbage one for current reference)
+                let rc = buffer.refs.load(Relaxed);
+                if rc == 2 {
+                    break;
+                } else if rc == 1 {
+                    // means the buffer have already been mark as garbage, should skip this one
+                    buffer_ptr = next_ptr;
+                    continue 'main;
+                }
+            }
+            res.append(&mut BufferMeta::flush_buffer(&*buffer));
             BufferMeta::mark_garbage(buffer_ptr);
             buffer_ptr = next_ptr;
         }
