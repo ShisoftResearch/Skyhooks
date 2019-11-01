@@ -115,12 +115,15 @@ pub fn free(ptr: Ptr) -> bool {
         let current_node = meta.numa;
         let node_id = addr_numa_id(addr);
         let node = &PER_NODE_META[node_id];
+        node.objects.refresh();
         if node_id != current_node {
             // append address to remote node if this address does not belong to current node
-            node.append_free(addr);
-            return true;
+            let contains_obj = node.objects.contains(addr);
+            if contains_obj {
+                node.append_free(addr);
+            }
+            return contains_obj;
         } else {
-            node.objects.refresh();
             if let Some(obj_meta) = node.objects.get(ptr as usize) {
                 let tier = obj_meta.tier;
                 if obj_meta.tid == meta.tid {
