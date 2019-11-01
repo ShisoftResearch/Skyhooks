@@ -39,7 +39,12 @@ impl<V: Clone> EvMap<V> {
     }
 
     pub fn remove_producer(&self, producer: &Arc<Producer<V>>) {
-        self.producers.remove(producer.id);
+        if let Some(p) = self.producers.remove(producer.id) {
+            let items = p.cache.drop_out_all();
+            for (k, v) in items {
+                self.map.insert(k, v);
+            }
+        }
     }
 
     pub fn refresh(&self) {

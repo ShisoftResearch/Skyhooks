@@ -9,7 +9,7 @@ use core::mem;
 use core::mem::MaybeUninit;
 use core::sync::atomic::AtomicUsize;
 use crossbeam_queue::{ArrayQueue, PushError, SegQueue};
-use lfmap::Map;
+use lfmap::{Map, ObjectMap};
 use std::borrow::Borrow;
 use std::cell::RefCell;
 use std::collections::LinkedList;
@@ -19,8 +19,10 @@ use std::sync::Arc;
 const NUM_SIZE_CLASS: usize = 16;
 const CACHE_LINE_SIZE: usize = 64;
 
+type SharedFreeList = Arc<lflist::List<usize>>;
 type TSizeClasses = [SizeClass; NUM_SIZE_CLASS];
 type TCommonSizeClasses = [CommonSizeClass; NUM_SIZE_CLASS];
+type TThreadFreeLists = [SharedFreeList; NUM_SIZE_CLASS];
 
 thread_local! {
     static THREAD_META: ThreadMeta = ThreadMeta::new()
@@ -46,6 +48,7 @@ struct NodeMeta {
     alloc_pos: AtomicUsize,
     common: TCommonSizeClasses,
     pending_free: lflist::List<usize>,
+    thread_free: lfmap::ObjectMap<TThreadFreeLists>,
     objects: evmap::EvMap<ObjectMeta>,
 }
 
@@ -53,7 +56,7 @@ struct SizeClass {
     size: usize,
     // reserved page for every size class to ensure utilization
     reserved: ReservedPage,
-    free_list: lflist::List<usize>,
+    free_list: Arc<lflist::List<usize>>,
 }
 
 struct CommonSizeClass {
@@ -107,24 +110,32 @@ pub fn contains(ptr: Ptr) -> bool {
     THREAD_META.with(|meta| unimplemented!())
 }
 pub fn free(ptr: Ptr) -> bool {
-    let addr = ptr as usize;
-    let current_node = THREAD_META.with(|meta| meta.numa);
-    let node_id = addr_numa_id(addr);
-    let node = &PER_NODE_META[node_id];
-    if node_id != current_node {
-        // append address to remote node if this address does not belong to current node
-        node.append_free(addr);
-        return true;
-    } else {
-        node.objects.refresh();
-        if let Some(obj_meta) = node.objects.get(ptr as usize) {
-            let tier = obj_meta.tier;
-
-            unimplemented!()
+    THREAD_META.with(|meta| {
+        let addr = ptr as usize;
+        let current_node = meta.numa;
+        let node_id = addr_numa_id(addr);
+        let node = &PER_NODE_META[node_id];
+        if node_id != current_node {
+            // append address to remote node if this address does not belong to current node
+            node.append_free(addr);
+            return true;
         } else {
-            return false;
+            node.objects.refresh();
+            if let Some(obj_meta) = node.objects.get(ptr as usize) {
+                let tier = obj_meta.tier;
+                if let Some(thread_free_list) = node.thread_free.get(obj_meta.tid) {
+                    // found belong thread, insert into the thread free list
+                    thread_free_list[tier].push(ptr as usize);
+                } else {
+                    // cannot find the belong thread, insert into self free list
+                    meta.sizes[tier].free_list.push(ptr as usize);
+                }
+                return true;
+            } else {
+                return false;
+            }
         }
-    }
+    })
 }
 pub fn meta_of(ptr: Ptr) -> Option<ObjectMeta> {
     THREAD_META.with(|meta| unimplemented!())
@@ -135,13 +146,18 @@ pub fn size_of(ptr: Ptr) -> Option<usize> {
 
 impl ThreadMeta {
     pub fn new() -> Self {
-        let numa = current_numa();
-        let objects = PER_NODE_META[numa].objects.new_producer();
+        let numa_id = current_numa();
+        let numa = &PER_NODE_META[numa_id];
+        let objects = numa.objects.new_producer();
+        let size_classes = size_classes();
+        let thread_free_lists = thread_free_lists(&size_classes);
+        let tid = current_thread_id();
+        numa.thread_free.insert(tid, thread_free_lists);
         Self {
-            numa,
+            numa: numa_id,
             objects,
-            sizes: size_classes(),
-            tid: current_thread_id(),
+            sizes: size_classes,
+            tid,
         }
     }
 
@@ -162,6 +178,7 @@ impl Drop for ThreadMeta {
         let numa_id = self.numa;
         let numa = &PER_NODE_META[numa_id];
         numa.objects.remove_producer(&self.objects);
+        numa.thread_free.remove(self.tid);
         for (i, size_class) in self.sizes.into_iter().enumerate() {
             let common = &numa.common[i];
             common.reserved.push(size_class.reserved.clone());
@@ -175,7 +192,7 @@ impl SizeClass {
         Self {
             size: tier,
             reserved: ReservedPage::new(),
-            free_list: lflist::List::new(),
+            free_list: Arc::new(lflist::List::new()),
         }
     }
 }
@@ -263,6 +280,7 @@ fn gen_numa_node_list() -> FixedVec<NodeMeta> {
             alloc_pos: AtomicUsize::new(node_base),
             common: common_size_classes(),
             pending_free: lflist::List::new(),
+            thread_free: ObjectMap::with_capacity(128),
             objects: evmap::EvMap::new(),
         };
     }
@@ -293,6 +311,17 @@ fn common_size_classes() -> TCommonSizeClasses {
         tier *= 2;
     }
     unsafe { mem::transmute::<_, TCommonSizeClasses>(data) }
+}
+
+fn thread_free_lists(size_classes: &TSizeClasses) -> TThreadFreeLists {
+    let mut data: [MaybeUninit<SharedFreeList>; NUM_SIZE_CLASS] =
+        unsafe { MaybeUninit::uninit().assume_init() };
+    let mut id = 0;
+    for elem in &mut data[..] {
+        *elem = MaybeUninit::new(size_classes[id].free_list.clone());
+        id += 1;
+    }
+    unsafe { mem::transmute::<_, TThreadFreeLists>(data) }
 }
 
 #[inline]
