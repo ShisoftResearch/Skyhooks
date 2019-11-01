@@ -107,7 +107,12 @@ pub fn allocate(size: usize) -> Ptr {
     })
 }
 pub fn contains(ptr: Ptr) -> bool {
-    THREAD_META.with(|meta| unimplemented!())
+    let addr = ptr as usize;
+    let current_node = meta.numa;
+    let node_id = addr_numa_id(addr);
+    let node = &PER_NODE_META[node_id];
+    node.objects.refresh();
+    node.objects.contains(addr)
 }
 pub fn free(ptr: Ptr) -> bool {
     THREAD_META.with(|meta| {
