@@ -123,7 +123,10 @@ pub fn free(ptr: Ptr) -> bool {
             node.objects.refresh();
             if let Some(obj_meta) = node.objects.get(ptr as usize) {
                 let tier = obj_meta.tier;
-                if let Some(thread_free_list) = node.thread_free.get(obj_meta.tid) {
+                if obj_meta.tid == meta.tid {
+                    // object from this thread, insert into this free-list
+                    meta.sizes[tier].free_list.push(ptr as usize);
+                } else if let Some(thread_free_list) = node.thread_free.get(obj_meta.tid) {
                     // found belong thread, insert into the thread free list
                     thread_free_list[tier].push(ptr as usize);
                 } else {
