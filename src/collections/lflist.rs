@@ -2,11 +2,11 @@
 
 use crate::bump_heap::BumpAllocator;
 use crate::utils::*;
+use core::ptr;
 use core::{intrinsics, mem};
 use std::ops::Deref;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicPtr, AtomicUsize};
-use core::ptr;
 
 struct BufferMeta<T> {
     head: AtomicUsize,
@@ -18,15 +18,15 @@ struct BufferMeta<T> {
 
 pub struct List<T> {
     head: AtomicPtr<BufferMeta<T>>,
-    count: AtomicUsize
+    count: AtomicUsize,
 }
 
-impl <T>List<T> {
+impl<T> List<T> {
     pub fn new() -> Self {
         let first_buffer = BufferMeta::new();
         Self {
             head: AtomicPtr::new(first_buffer),
-            count: AtomicUsize::new(0)
+            count: AtomicUsize::new(0),
         }
     }
 
@@ -56,7 +56,9 @@ impl <T>List<T> {
             }
         }
         let ptr = pos as *mut T;
-        unsafe { ptr::write(ptr, item); }
+        unsafe {
+            ptr::write(ptr, item);
+        }
         self.count.fetch_add(1, Relaxed);
     }
 
@@ -116,10 +118,12 @@ impl <T>List<T> {
         self.count.fetch_sub(res.len(), Relaxed);
         return res;
     }
-    pub fn count(&self) -> usize { self.count.load(Relaxed) }
+    pub fn count(&self) -> usize {
+        self.count.load(Relaxed)
+    }
 }
 
-impl <T> Drop for List<T> {
+impl<T> Drop for List<T> {
     fn drop(&mut self) {
         unsafe {
             let mut node_ptr = self.head.load(Relaxed);
@@ -132,7 +136,7 @@ impl <T> Drop for List<T> {
     }
 }
 
-impl <T> BufferMeta <T> {
+impl<T> BufferMeta<T> {
     pub fn new() -> *mut BufferMeta<T> {
         let page_size = *SYS_PAGE_SIZE;
         let head_page = alloc_mem::<usize>(page_size) as *mut BufferMeta<T>;
@@ -162,7 +166,9 @@ impl <T> BufferMeta <T> {
             if buffer.refs.compare_and_swap(0, std::usize::MAX, Relaxed) != 0 {
                 return;
             }
-            for obj in Self::flush_buffer(buffer) { drop(obj) }
+            for obj in Self::flush_buffer(buffer) {
+                drop(obj)
+            }
         }
         dealloc_mem::<usize>(buffer as usize, *SYS_PAGE_SIZE)
     }
@@ -195,7 +201,7 @@ struct BufferRef<T> {
     ptr: *mut BufferMeta<T>,
 }
 
-impl <T> Drop for BufferRef<T> {
+impl<T> Drop for BufferRef<T> {
     fn drop(&mut self) {
         {
             let buffer = unsafe { &*self.ptr };
@@ -205,7 +211,7 @@ impl <T> Drop for BufferRef<T> {
     }
 }
 
-impl <T> Deref for BufferRef<T> {
+impl<T> Deref for BufferRef<T> {
     type Target = BufferMeta<T>;
 
     fn deref(&self) -> &Self::Target {
@@ -214,7 +220,9 @@ impl <T> Deref for BufferRef<T> {
 }
 
 #[inline(always)]
-fn null_buffer<T>() -> *mut BufferMeta<T> { 0 as *mut BufferMeta<T> }
+fn null_buffer<T>() -> *mut BufferMeta<T> {
+    0 as *mut BufferMeta<T>
+}
 
 #[cfg(test)]
 mod test {
