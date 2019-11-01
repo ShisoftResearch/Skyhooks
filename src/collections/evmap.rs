@@ -12,13 +12,13 @@ pub struct Producer<V> {
     cache: lflist::List<(usize, V)>,
 }
 
-pub struct EnvMap<V: Clone> {
+pub struct EvMap<V: Clone> {
     map: lfmap::ObjectMap<V>,
     producers: lfmap::ObjectMap<Arc<Producer<V>>>,
     counter: AtomicUsize,
 }
 
-impl<V: Clone> EnvMap<V> {
+impl<V: Clone> EvMap<V> {
     pub fn new() -> Self {
         Self {
             map: ObjectMap::with_capacity(512),
@@ -44,17 +44,14 @@ impl<V: Clone> EnvMap<V> {
 
     pub fn refresh(&self) {
         // get all items from producers and insert into the local map
-        let producer_items = {
+        let items = {
             self.producers
                 .entries()
                 .into_iter()
                 .map(|(_, p)| p.cache.drop_out_all())
+                .flatten()
                 .collect::<Vec<_>>()
         };
-        let items = producer_items
-            .into_iter()
-            .flatten()
-            .collect::<Vec<(usize, V)>>();
         for (k, v) in items {
             self.map.insert(k, v);
         }

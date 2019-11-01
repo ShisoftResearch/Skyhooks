@@ -5,6 +5,7 @@ use crate::utils::*;
 use core::ptr;
 use core::{intrinsics, mem};
 use std::ops::Deref;
+use std::ptr::null;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicPtr, AtomicUsize};
 
@@ -118,6 +119,42 @@ impl<T> List<T> {
         self.count.fetch_sub(res.len(), Relaxed);
         return res;
     }
+
+    pub fn prepend_with(&self, other: &Self) {
+        let other_head = other.head.load(Relaxed);
+        loop {
+            let mut other_tail = BufferMeta::borrow(other_head);
+            // probe the last buffer in other link
+            loop {
+                let next_ptr = other_tail.next.load(Relaxed);
+                if next_ptr == null_buffer() {
+                    break;
+                }
+                other_tail = BufferMeta::borrow(next_ptr);
+            }
+            let this_head = self.head.load(Relaxed);
+            if other_tail
+                .next
+                .compare_and_swap(null_buffer(), this_head, Relaxed)
+                != null_buffer()
+            {
+                continue;
+            }
+            if self.head.compare_and_swap(this_head, other_head, Relaxed) != this_head {
+                continue;
+            }
+            break;
+        }
+        if other
+            .head
+            .compare_and_swap(other_head, BufferMeta::new(), Relaxed)
+            != other_head
+        {
+            panic!() // TODO: deal with this one, should not happened in current use case
+        }
+        self.count.fetch_add(other.count.load(Relaxed), Relaxed);
+    }
+
     pub fn count(&self) -> usize {
         self.count.load(Relaxed)
     }

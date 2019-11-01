@@ -1,6 +1,7 @@
 use super::*;
 use crate::collections::fixvec::FixedVec;
 use crate::collections::lflist;
+use crate::collections::evmap;
 use crate::generic_heap::ObjectMeta;
 use crate::mmap::mmap_without_fd;
 use crate::utils::*;
@@ -13,6 +14,7 @@ use std::borrow::Borrow;
 use std::cell::RefCell;
 use std::collections::LinkedList;
 use std::sync::atomic::Ordering::Relaxed;
+use std::sync::Arc;
 
 const NUM_SIZE_CLASS: usize = 16;
 const CACHE_LINE_SIZE: usize = 64;
@@ -33,6 +35,7 @@ lazy_static! {
 
 struct ThreadMeta {
     sizes: TSizeClasses,
+    objects: Arc<evmap::Producer<ObjectMeta>>,
     numa: usize,
     tid: usize,
 }
@@ -43,6 +46,7 @@ struct NodeMeta {
     alloc_pos: AtomicUsize,
     common: TCommonSizeClasses,
     pending_free: lflist::List<usize>,
+    objects: evmap::EvMap<ObjectMeta>
 }
 
 struct SizeClass {
@@ -59,6 +63,7 @@ struct CommonSizeClass {
     free_list: lflist::List<usize>,
 }
 
+#[derive(Clone)]
 struct ReservedPage {
     addr: RefCell<usize>,
     pos: RefCell<usize>,
@@ -120,9 +125,11 @@ pub fn size_of(ptr: Ptr) -> Option<usize> {
 
 impl ThreadMeta {
     pub fn new() -> Self {
+        let numa = current_numa();
+        let objects = PER_NODE_META[numa].objects.new_producer();
         Self {
+            numa, objects,
             sizes: size_classes(),
-            numa: current_numa(),
             tid: current_thread_id(),
         }
     }
@@ -131,7 +138,14 @@ impl ThreadMeta {
 // Return thread resource to global
 impl Drop for ThreadMeta {
     fn drop(&mut self) {
-        unimplemented!()
+        let numa_id = self.numa;
+        let numa = &PER_NODE_META[numa_id];
+        numa.objects.remove_producer(&self.objects);
+        for (i, size_class) in self.sizes.into_iter().enumerate() {
+            let common = &numa.common[i];
+            common.reserved.push(size_class.reserved.clone());
+            common.free_list.prepend_with(&size_class.free_list);
+        }
     }
 }
 
@@ -228,6 +242,7 @@ fn gen_numa_node_list() -> FixedVec<NodeMeta> {
             alloc_pos: AtomicUsize::new(node_base),
             common: common_size_classes(),
             pending_free: lflist::List::new(),
+            objects: evmap::EvMap::new()
         };
     }
     return nodes;
