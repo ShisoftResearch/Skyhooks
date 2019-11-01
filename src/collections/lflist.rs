@@ -138,7 +138,7 @@ impl<T> List<T> {
                 .compare_and_swap(null_buffer(), this_head, Relaxed)
                 != null_buffer()
             {
-                continue;
+                panic!()
             }
             if self.head.compare_and_swap(this_head, other_head, Relaxed) != this_head {
                 continue;

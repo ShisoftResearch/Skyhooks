@@ -1,6 +1,7 @@
 use super::*;
 use libc::*;
 use utils::current_thread_id;
+use crate::utils::current_numa;
 
 static LARGE_OBJ_THRESHOLD: usize = 1024 * 1024;
 
@@ -57,16 +58,4 @@ pub unsafe fn realloc(ptr: Ptr, size: Size) -> Ptr {
     memcpy(new_ptr, ptr, old_size);
     free(ptr);
     new_ptr
-}
-
-impl ObjectMeta {
-    pub fn new(ptr: usize, size: usize) -> Self {
-        Self {
-            size,
-            addr: ptr,
-            numa: 0,
-            tier: 0,
-            tid: current_thread_id(),
-        }
-    }
 }

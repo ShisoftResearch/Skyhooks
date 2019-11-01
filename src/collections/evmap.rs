@@ -61,7 +61,7 @@ impl<V: Clone> EvMap<V> {
         self.map.insert(key, value)
     }
 
-    pub fn get(&self, key: usize, value: V) -> Option<V> {
+    pub fn get(&self, key: usize) -> Option<V> {
         self.map.get(key)
     }
 

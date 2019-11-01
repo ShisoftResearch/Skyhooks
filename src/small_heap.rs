@@ -1,7 +1,7 @@
 use super::*;
+use crate::collections::evmap;
 use crate::collections::fixvec::FixedVec;
 use crate::collections::lflist;
-use crate::collections::evmap;
 use crate::generic_heap::ObjectMeta;
 use crate::mmap::mmap_without_fd;
 use crate::utils::*;
@@ -46,7 +46,7 @@ struct NodeMeta {
     alloc_pos: AtomicUsize,
     common: TCommonSizeClasses,
     pending_free: lflist::List<usize>,
-    objects: evmap::EvMap<ObjectMeta>
+    objects: evmap::EvMap<ObjectMeta>,
 }
 
 struct SizeClass {
@@ -78,26 +78,29 @@ pub fn allocate(size: usize) -> Ptr {
         // allocate memory inside the thread meta
         let size_class_index = size_class_index_from_size(size);
         let size_class = &meta.sizes[size_class_index];
-        // first, looking in the free list
-        if let Some(freed) = size_class.free_list.pop() {
-            return freed as Ptr;
-        }
-
-        // next, ask the reservation station for objects
-        if let Some(reserved) = size_class.reserved.take(size_class.size) {
-            return reserved as Ptr;
-        }
-
-        // allocate from node common list
-        let node = &PER_NODE_META[meta.numa];
-        if let Some(freed) = node.common[size_class_index].free_list.pop() {
-            return freed as Ptr;
-        }
-
-        // finally, allocate from node memory space in the reservation station
-        size_class
-            .reserved
-            .allocate_from_common(size_class.size, size_class_index, &node) as Ptr
+        let addr = if let Some(freed) = size_class.free_list.pop() {
+            // first, looking in the free list
+            freed
+        } else if let Some(reserved) = size_class.reserved.take(size_class.size) {
+            // next, ask the reservation station for objects
+            reserved
+        } else {
+            let node = &PER_NODE_META[meta.numa];
+            // allocate from node common list
+            if let Some(freed) = node.common[size_class_index].free_list.pop() {
+                freed
+            } else {
+                // finally, allocate from node memory space in the reservation station
+                size_class
+                    .reserved
+                    .allocate_from_common(size_class.size, size_class_index, &node)
+            }
+        };
+        meta.objects.insert(
+            addr,
+            meta.object_map(addr, size_class_index, size_class.size),
+        );
+        return addr as Ptr;
     })
 }
 pub fn contains(ptr: Ptr) -> bool {
@@ -107,14 +110,21 @@ pub fn free(ptr: Ptr) -> bool {
     let addr = ptr as usize;
     let current_node = THREAD_META.with(|meta| meta.numa);
     let node_id = addr_numa_id(addr);
+    let node = &PER_NODE_META[node_id];
     if node_id != current_node {
         // append address to remote node if this address does not belong to current node
-        let remote_node: &NodeMeta = &PER_NODE_META[node_id];
-        remote_node.append_free(addr);
+        node.append_free(addr);
+        return true;
     } else {
-        unimplemented!()
+        node.objects.refresh();
+        if let Some(obj_meta) = node.objects.get(ptr as usize) {
+            let tier = obj_meta.tier;
+
+            unimplemented!()
+        } else {
+            return false;
+        }
     }
-    unimplemented!()
 }
 pub fn meta_of(ptr: Ptr) -> Option<ObjectMeta> {
     THREAD_META.with(|meta| unimplemented!())
@@ -128,9 +138,20 @@ impl ThreadMeta {
         let numa = current_numa();
         let objects = PER_NODE_META[numa].objects.new_producer();
         Self {
-            numa, objects,
+            numa,
+            objects,
             sizes: size_classes(),
             tid: current_thread_id(),
+        }
+    }
+
+    pub fn object_map(&self, ptr: usize, tier: usize, size: usize) -> ObjectMeta {
+        ObjectMeta {
+            size,
+            addr: ptr,
+            numa: self.numa,
+            tier,
+            tid: self.tid,
         }
     }
 }
@@ -242,7 +263,7 @@ fn gen_numa_node_list() -> FixedVec<NodeMeta> {
             alloc_pos: AtomicUsize::new(node_base),
             common: common_size_classes(),
             pending_free: lflist::List::new(),
-            objects: evmap::EvMap::new()
+            objects: evmap::EvMap::new(),
         };
     }
     return nodes;

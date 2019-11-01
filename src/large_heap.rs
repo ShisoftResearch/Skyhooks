@@ -24,7 +24,14 @@ impl Heap {
         let padding = align_padding(size, *SYS_PAGE_SIZE);
         let page_size = size + padding;
         let ptr = mmap_without_fd(page_size) as usize;
-        let meta = ObjectMeta::new(ptr, size);
+        let meta = ObjectMeta {
+            size,
+            addr: ptr,
+            // large heap don't care following fields
+            numa: 0,
+            tier: 0,
+            tid: 0
+        };
         self.meta.insert(ptr, meta);
         ptr as Ptr
     }
