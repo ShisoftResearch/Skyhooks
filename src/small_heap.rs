@@ -15,6 +15,8 @@ use std::cell::RefCell;
 use std::collections::LinkedList;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;
+use std::thread;
+
 
 const NUM_SIZE_CLASS: usize = 16;
 const CACHE_LINE_SIZE: usize = 64;
@@ -47,7 +49,7 @@ struct NodeMeta {
     base: usize,
     alloc_pos: AtomicUsize,
     common: TCommonSizeClasses,
-    pending_free: lflist::List<usize>,
+    pending_free: RemoteNodeFree,
     thread_free: lfmap::ObjectMap<TThreadFreeLists>,
     objects: evmap::EvMap<ObjectMeta>,
 }
@@ -70,6 +72,11 @@ struct CommonSizeClass {
 struct ReservedPage {
     addr: RefCell<usize>,
     pos: RefCell<usize>,
+}
+
+struct RemoteNodeFree {
+    pending_free: Arc<lflist::List<usize>>,
+    sentinel_thread: thread::Thread
 }
 
 pub struct Heap {
@@ -108,7 +115,6 @@ pub fn allocate(size: usize) -> Ptr {
 }
 pub fn contains(ptr: Ptr) -> bool {
     let addr = ptr as usize;
-    let current_node = meta.numa;
     let node_id = addr_numa_id(addr);
     let node = &PER_NODE_META[node_id];
     node.objects.refresh();
@@ -125,7 +131,7 @@ pub fn free(ptr: Ptr) -> bool {
             // append address to remote node if this address does not belong to current node
             let contains_obj = node.objects.contains(addr);
             if contains_obj {
-                node.append_free(addr);
+                node.pending_free.push(addr);
             }
             return contains_obj;
         } else {
@@ -278,6 +284,38 @@ impl NodeMeta {
     }
 }
 
+impl RemoteNodeFree {
+    pub fn new(numa_id: usize) -> Self {
+        let list = Arc::new(lflist::List::new());
+        let list_clone = list.clone();
+        let thread = thread::Builder::new()
+            .name(format!("Remote Free {}", numa_id))
+            .spawn(move || {
+                loop {
+                    if let Some(addr) = list_clone.pop() {
+                        debug_assert_eq!(addr_numa_id(addr), numa_id,
+                                         "Node freeing remote pending object");
+                        free(addr as Ptr);
+                    } else {
+                        thread::park();
+                    }
+                }
+            })
+            .unwrap()
+            .thread()
+            .clone();
+        Self {
+            pending_free: list,
+            sentinel_thread: thread
+        }
+    }
+
+    pub fn push(&self, addr: usize) {
+        self.pending_free.push(addr as usize);
+        self.sentinel_thread.unpark();
+    }
+}
+
 fn gen_numa_node_list() -> FixedVec<NodeMeta> {
     let num_nodes = *NUM_NUMA_NODES;
     let node_shift_bits = *NODE_SHIFT_BITS;
@@ -290,7 +328,7 @@ fn gen_numa_node_list() -> FixedVec<NodeMeta> {
             base: node_base,
             alloc_pos: AtomicUsize::new(node_base),
             common: common_size_classes(),
-            pending_free: lflist::List::new(),
+            pending_free: RemoteNodeFree::new(i),
             thread_free: ObjectMap::with_capacity(128),
             objects: evmap::EvMap::new(),
         };
