@@ -1,8 +1,8 @@
 // usize lock-free, wait free paged linked list stack
 
 use crate::utils::*;
-use core::ptr;
 use core::mem;
+use core::ptr;
 use std::ops::Deref;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicPtr, AtomicUsize};

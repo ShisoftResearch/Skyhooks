@@ -29,7 +29,7 @@ impl Heap {
             // large heap don't care following fields
             numa: 0,
             tier: 0,
-            tid: 0
+            tid: 0,
         };
         self.meta.insert(ptr, meta);
         ptr as Ptr

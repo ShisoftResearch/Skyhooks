@@ -72,7 +72,9 @@ impl<V: Clone> EvMap<V> {
         self.map.remove(key)
     }
 
-    pub fn contains(&self, key: usize) -> bool { self.map.contains(key) }
+    pub fn contains(&self, key: usize) -> bool {
+        self.map.contains(key)
+    }
 }
 
 impl<V> Producer<V> {

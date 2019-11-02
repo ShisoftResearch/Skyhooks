@@ -8,13 +8,13 @@ use crate::utils::*;
 use core::mem;
 use core::mem::MaybeUninit;
 use core::sync::atomic::AtomicUsize;
-use crossbeam_queue:: SegQueue;
+use crossbeam_queue::SegQueue;
 use lfmap::{Map, ObjectMap};
 use std::cell::RefCell;
+use std::os::unix::thread::JoinHandleExt;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;
 use std::thread;
-use std::os::unix::thread::JoinHandleExt;
 
 const NUM_SIZE_CLASS: usize = 16;
 
@@ -70,7 +70,7 @@ struct ReservedPage {
 
 struct RemoteNodeFree {
     pending_free: Arc<lflist::List<usize>>,
-    sentinel_thread: thread::Thread
+    sentinel_thread: thread::Thread,
 }
 
 pub fn allocate(size: usize) -> Ptr {
@@ -271,26 +271,25 @@ impl RemoteNodeFree {
         let list_clone = list.clone();
         let handle = thread::Builder::new()
             .name(format!("Remote Free {}", node_id))
-            .spawn(move || {
-                loop {
-                    if let Some(addr) = list_clone.pop() {
-                        debug_assert_eq!(addr_numa_id(addr), node_id,
-                                         "Node freeing remote pending object");
-                        free(addr as Ptr);
-                    } else {
-                        thread::park();
-                    }
+            .spawn(move || loop {
+                if let Some(addr) = list_clone.pop() {
+                    debug_assert_eq!(
+                        addr_numa_id(addr),
+                        node_id,
+                        "Node freeing remote pending object"
+                    );
+                    free(addr as Ptr);
+                } else {
+                    thread::park();
                 }
             })
             .unwrap();
         let pthread = handle.as_pthread_t();
-        let thread = handle
-            .thread()
-            .clone();
+        let thread = handle.thread().clone();
         set_node_affinity(node_id, pthread);
         Self {
             pending_free: list,
-            sentinel_thread: thread
+            sentinel_thread: thread,
         }
     }
 
