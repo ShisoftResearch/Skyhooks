@@ -90,6 +90,23 @@ pub fn current_numa() -> usize {
     0
 }
 
+#[cfg(target_os = "linux")]
+pub fn set_node_affinity(node_id: usize, thread_id: u64) {
+    unsafe {
+        let mut set: libc::cpu_set_t = std::mem::zeroed();
+        SYS_CPU_NODE
+            .iter()
+            .filter_map(|(cpu, node)| if *node == node_id  { Some(*cpu) } else { None })
+            .for_each(|cpu| { libc::CPU_SET(cpu, &mut set) });
+        libc::pthread_setaffinity_np(thread_id, std::mem::size_of::<libc::cpu_set_t>(), &set);
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn set_node_affinity(node_id: usize, thread_id: u64) {
+    // TODO: Make it work for non-linux systems
+}
+
 #[inline]
 pub fn is_power_of_2(x: usize) -> bool {
     (x & (x - 1)) == 0

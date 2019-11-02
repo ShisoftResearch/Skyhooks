@@ -16,7 +16,7 @@ use std::collections::LinkedList;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;
 use std::thread;
-
+use std::os::unix::thread::JoinHandleExt;
 
 const NUM_SIZE_CLASS: usize = 16;
 const CACHE_LINE_SIZE: usize = 64;
@@ -285,15 +285,15 @@ impl NodeMeta {
 }
 
 impl RemoteNodeFree {
-    pub fn new(numa_id: usize) -> Self {
+    pub fn new(node_id: usize) -> Self {
         let list = Arc::new(lflist::List::new());
         let list_clone = list.clone();
-        let thread = thread::Builder::new()
-            .name(format!("Remote Free {}", numa_id))
+        let handle = thread::Builder::new()
+            .name(format!("Remote Free {}", node_id))
             .spawn(move || {
                 loop {
                     if let Some(addr) = list_clone.pop() {
-                        debug_assert_eq!(addr_numa_id(addr), numa_id,
+                        debug_assert_eq!(addr_numa_id(addr), node_id,
                                          "Node freeing remote pending object");
                         free(addr as Ptr);
                     } else {
@@ -301,9 +301,12 @@ impl RemoteNodeFree {
                     }
                 }
             })
-            .unwrap()
+            .unwrap();
+        let pthread = handle.as_pthread_t();
+        let thread = handle
             .thread()
             .clone();
+        set_node_affinity(node_id, pthread);
         Self {
             pending_free: list,
             sentinel_thread: thread
