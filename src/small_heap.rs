@@ -44,7 +44,7 @@ struct ThreadMeta {
 struct NodeMeta {
     alloc_pos: AtomicUsize,
     common: TCommonSizeClasses,
-    pending_free: RemoteNodeFree,
+    pending_free: Option<RemoteNodeFree>,
     thread_free: lfmap::ObjectMap<TThreadFreeLists>,
     objects: evmap::EvMap<ObjectMeta>,
 }
@@ -121,7 +121,7 @@ pub fn free(ptr: Ptr) -> bool {
             // append address to remote node if this address does not belong to current node
             let contains_obj = node.objects.contains(addr);
             if contains_obj {
-                node.pending_free.push(addr);
+                node.pending_free.as_ref().unwrap().push(addr);
             }
             return contains_obj;
         } else {
@@ -306,10 +306,11 @@ fn gen_numa_node_list() -> FixedVec<NodeMeta> {
     let mut nodes = FixedVec::new(num_nodes);
     for i in 0..num_nodes {
         let node_base = heap_base + (i << node_shift_bits);
+        let remote_free = if num_nodes > 0 { Some(RemoteNodeFree::new(i)) } else { None };
         nodes[i] = NodeMeta {
             alloc_pos: AtomicUsize::new(node_base),
             common: common_size_classes(),
-            pending_free: RemoteNodeFree::new(i),
+            pending_free: remote_free,
             thread_free: ObjectMap::with_capacity(128),
             objects: evmap::EvMap::new(),
         };
