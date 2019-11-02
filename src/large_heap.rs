@@ -2,7 +2,6 @@ use super::*;
 use crate::generic_heap::ObjectMeta;
 use crate::mmap::mmap_without_fd;
 use crate::utils::*;
-use core::mem;
 use lfmap::{Map, ObjectMap};
 use mmap::munmap_memory;
 
@@ -36,15 +35,12 @@ impl Heap {
         ptr as Ptr
     }
     pub fn free(&self, ptr: Ptr) -> bool {
-        if let Some(meta) = self.meta.remove((ptr as usize)) {
+        if let Some(meta) = self.meta.remove(ptr as usize) {
             munmap_memory(ptr, meta.size);
             true
         } else {
             false
         }
-    }
-    pub fn meta_of(&self, ptr: Ptr) -> Option<ObjectMeta> {
-        self.meta.get(ptr as usize)
     }
     pub fn size_of(&self, ptr: Ptr) -> Option<usize> {
         self.meta.get(ptr as usize).map(|m| m.size)

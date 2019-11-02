@@ -1,7 +1,5 @@
 use super::*;
 use libc::*;
-use utils::current_thread_id;
-use crate::utils::current_numa;
 
 static LARGE_OBJ_THRESHOLD: usize = 1024 * 1024;
 
@@ -44,7 +42,7 @@ pub unsafe fn realloc(ptr: Ptr, size: Size) -> Ptr {
     }
     let old_size = if let Some(size) = small_heap::size_of(ptr) {
         size
-    } else if let Some(meta) = LARGE_HEAP.size_of(ptr) {
+    } else if let Some(_) = LARGE_HEAP.size_of(ptr) {
         size
     } else {
         warn!("Cannot determinate old object");

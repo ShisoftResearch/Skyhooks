@@ -10,7 +10,6 @@
 use crate::mmap::{dealloc_regional, mmap_without_fd, munmap_memory};
 use crate::utils::*;
 use crate::Ptr;
-use alloc::vec::Vec;
 use core::alloc::{GlobalAlloc, Layout};
 use core::sync::atomic::Ordering::Relaxed;
 use core::sync::atomic::{AtomicUsize, Ordering};
@@ -23,11 +22,6 @@ lazy_static! {
 pub struct AllocatorInner {
     tail: AtomicUsize,
     addr: AtomicUsize,
-}
-
-struct Object {
-    start: usize,
-    size: usize,
 }
 
 const HEAP_VIRT_SIZE: usize = 2 * 1024 * 1024 * 1024; // 2GB
@@ -91,9 +85,7 @@ unsafe impl GlobalAlloc for AllocatorInner {
                 == current_tail
             {
                 let meta_loc = current_tail + tail_align_padding;
-                unsafe {
-                    ptr::write(meta_loc as *mut usize, current_tail);
-                }
+                ptr::write(meta_loc as *mut usize, current_tail);
                 debug_assert!(current_tail > 0);
                 let final_addr = current_tail + word_size + tail_align_padding;
                 debug_assert!(final_addr > addr);
@@ -110,7 +102,6 @@ unsafe impl GlobalAlloc for AllocatorInner {
         if layout.size() < (*SYS_PAGE_SIZE >> 1) {
             return;
         }
-        let word = mem::size_of::<usize>();
         let ptr_pos = ptr as usize;
         let start_pos = ptr_pos - mem::size_of::<usize>();
         let starts = ptr::read(start_pos as *const usize);

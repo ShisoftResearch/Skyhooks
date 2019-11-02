@@ -1,3 +1,8 @@
 extern crate nulloc;
 
-mod bump_heap;
+use nulloc::api::NullocAllocator;
+
+#[test]
+pub fn generic() {
+
+}

@@ -1,11 +1,9 @@
 // usize lock-free, wait free paged linked list stack
 
-use crate::bump_heap::BumpAllocator;
 use crate::utils::*;
 use core::ptr;
-use core::{intrinsics, mem};
+use core::mem;
 use std::ops::Deref;
-use std::ptr::null;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicPtr, AtomicUsize};
 

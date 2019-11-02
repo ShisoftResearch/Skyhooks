@@ -1,8 +1,6 @@
 // eventual-consistent map based on lfmap and lflist from Shisoft
 use crate::collections::lflist;
 use lfmap::{Map, ObjectMap};
-use parking_lot::{Mutex, RwLock};
-use std::collections::HashMap;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;

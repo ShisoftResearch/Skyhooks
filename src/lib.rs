@@ -10,7 +10,7 @@ extern crate lazy_static;
 extern crate log;
 extern crate libc;
 
-mod api;
+pub mod api;
 mod bump_heap;
 mod generic_heap;
 mod large_heap;
@@ -27,7 +27,6 @@ pub const NULL: usize = 0;
 pub const NULL_PTR: *mut c_void = NULL as *mut c_void;
 
 use crate::bump_heap::BumpAllocator;
-use core::alloc::{GlobalAlloc, Layout};
 use core::ffi::c_void;
 
 #[global_allocator]

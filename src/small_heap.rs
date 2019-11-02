@@ -8,18 +8,15 @@ use crate::utils::*;
 use core::mem;
 use core::mem::MaybeUninit;
 use core::sync::atomic::AtomicUsize;
-use crossbeam_queue::{ArrayQueue, PushError, SegQueue};
+use crossbeam_queue:: SegQueue;
 use lfmap::{Map, ObjectMap};
-use std::borrow::Borrow;
 use std::cell::RefCell;
-use std::collections::LinkedList;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;
 use std::thread;
 use std::os::unix::thread::JoinHandleExt;
 
 const NUM_SIZE_CLASS: usize = 16;
-const CACHE_LINE_SIZE: usize = 64;
 
 type SharedFreeList = Arc<lflist::List<usize>>;
 type TSizeClasses = [SizeClass; NUM_SIZE_CLASS];
@@ -45,8 +42,6 @@ struct ThreadMeta {
 }
 
 struct NodeMeta {
-    id: usize,
-    base: usize,
     alloc_pos: AtomicUsize,
     common: TCommonSizeClasses,
     pending_free: RemoteNodeFree,
@@ -62,7 +57,6 @@ struct SizeClass {
 }
 
 struct CommonSizeClass {
-    size: usize,
     // unused up reserves from dead threads
     reserved: SegQueue<ReservedPage>,
     free_list: lflist::List<usize>,
@@ -77,10 +71,6 @@ struct ReservedPage {
 struct RemoteNodeFree {
     pending_free: Arc<lflist::List<usize>>,
     sentinel_thread: thread::Thread
-}
-
-pub struct Heap {
-    addr: usize,
 }
 
 pub fn allocate(size: usize) -> Ptr {
@@ -154,11 +144,12 @@ pub fn free(ptr: Ptr) -> bool {
         }
     })
 }
-pub fn meta_of(ptr: Ptr) -> Option<ObjectMeta> {
-    THREAD_META.with(|meta| unimplemented!())
-}
 pub fn size_of(ptr: Ptr) -> Option<usize> {
-    THREAD_META.with(|meta| unimplemented!())
+    let addr = ptr as usize;
+    let node_id = addr_numa_id(addr);
+    let node_meta = &PER_NODE_META[node_id];
+    node_meta.objects.refresh();
+    node_meta.objects.get(addr).map(|o| o.size)
 }
 
 impl ThreadMeta {
@@ -274,16 +265,6 @@ impl ReservedPage {
     }
 }
 
-impl NodeMeta {
-    pub fn append_free(&self, addr: usize) {
-        // append freed object to this NUMA node, to be processed by this node
-        // this operation minimized communication cost by 4 atomic operations in common cases
-        // maybe 3 atomic operations after get rid of reference counting in lflist
-        debug_assert_eq!(self.id, addr_numa_id(addr));
-        self.pending_free.push(addr);
-    }
-}
-
 impl RemoteNodeFree {
     pub fn new(node_id: usize) -> Self {
         let list = Arc::new(lflist::List::new());
@@ -322,13 +303,11 @@ impl RemoteNodeFree {
 fn gen_numa_node_list() -> FixedVec<NodeMeta> {
     let num_nodes = *NUM_NUMA_NODES;
     let node_shift_bits = *NODE_SHIFT_BITS;
+    let heap_base = *HEAP_BASE;
     let mut nodes = FixedVec::new(num_nodes);
-    let mut heap_base = *HEAP_BASE;
     for i in 0..num_nodes {
         let node_base = heap_base + (i << node_shift_bits);
         nodes[i] = NodeMeta {
-            id: i,
-            base: node_base,
             alloc_pos: AtomicUsize::new(node_base),
             common: common_size_classes(),
             pending_free: RemoteNodeFree::new(i),
@@ -353,14 +332,11 @@ fn size_classes() -> TSizeClasses {
 fn common_size_classes() -> TCommonSizeClasses {
     let mut data: [MaybeUninit<CommonSizeClass>; NUM_SIZE_CLASS] =
         unsafe { MaybeUninit::uninit().assume_init() };
-    let mut tier = 2;
     for elem in &mut data[..] {
         *elem = MaybeUninit::new(CommonSizeClass {
-            size: tier,
             reserved: SegQueue::new(),
             free_list: lflist::List::new(),
         });
-        tier *= 2;
     }
     unsafe { mem::transmute::<_, TCommonSizeClasses>(data) }
 }

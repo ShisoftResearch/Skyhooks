@@ -16,7 +16,7 @@ pub fn mmap_without_fd(size: usize) -> Ptr {
         )
     };
     if ptr == -1 as isize as *mut c_void {
-        let err = panic!("mmap failed {}");
+        panic!("mmap failed {}");
     };
     no_huge_page(ptr, size);
     ptr
