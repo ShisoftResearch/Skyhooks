@@ -1,11 +1,16 @@
 use crate::{generic_heap, Ptr, Size, NULL_PTR};
 use core::alloc::{GlobalAlloc, Layout};
 use libc::*;
+use lfmap::{Map, WordMap};
+use crate::utils::align_padding;
+
+lazy_static! {
+    static ref RUST_ADDR_MAPPING: lfmap::WordMap = lfmap::WordMap::with_capacity(2048);
+}
 
 pub unsafe fn nu_malloc(size: Size) -> Ptr {
     generic_heap::malloc(size)
 }
-
 pub unsafe fn nu_free(ptr: Ptr) {
     generic_heap::free(ptr)
 }
@@ -30,10 +35,17 @@ unsafe impl GlobalAlloc for NullocAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let size = layout.size();
         let align = layout.align();
-        let actual_size = layout.padding_needed_for(align) + size;
-        nu_malloc(actual_size) as *mut u8
+        let actual_size = size + align - 1;
+        let base_addr = nu_malloc(actual_size) as usize;
+        let align_padding = align_padding(base_addr, align);
+        let rust_addr = base_addr + align_padding;
+        RUST_ADDR_MAPPING.insert(rust_addr, base_addr);
+        rust_addr as *mut u8
     }
     unsafe fn dealloc(&self, ptr: *mut u8, _layout: Layout) {
-        nu_free(ptr as Ptr)
+        let addr = ptr as usize;
+        if let Some(base_addr) = RUST_ADDR_MAPPING.remove(addr) {
+            nu_free(base_addr as Ptr)
+        }
     }
 }
