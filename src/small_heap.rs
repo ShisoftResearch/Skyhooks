@@ -402,7 +402,7 @@ mod test {
     #[test]
     pub fn general() {
         env_logger::try_init();
-        let ptr = allocate(9);
+        let mut ptr = allocate(9);
         unsafe {
             for i in 0..1000 {
                 *(ptr as *mut u64) = i;
@@ -410,5 +410,12 @@ mod test {
             }
         }
         free(ptr);
+        ptr = allocate(10);
+        unsafe {
+            for i in 0..1000 {
+                *(ptr as *mut u64) = i + 2;
+                assert_eq!(*(ptr as *mut u64), i + 2);
+            }
+        }
     }
 }
