@@ -397,17 +397,18 @@ fn size_class_index_from_size(size: usize) -> usize {
 
 #[cfg(test)]
 mod test {
-    use crate::small_heap::allocate;
+    use crate::small_heap::{allocate, free};
 
     #[test]
     pub fn general() {
         env_logger::try_init();
-        let ptr = allocate(8);
+        let ptr = allocate(9);
         unsafe {
             for i in 0..1000 {
                 *(ptr as *mut u64) = i;
                 assert_eq!(*(ptr as *mut u64), i);
             }
         }
+        free(ptr);
     }
 }
