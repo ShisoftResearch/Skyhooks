@@ -286,7 +286,7 @@ impl RemoteNodeFree {
             .unwrap();
         let pthread = handle.as_pthread_t();
         let thread = handle.thread().clone();
-        set_node_affinity(node_id, pthread);
+        set_node_affinity(node_id, pthread as u64);
         Self {
             pending_free: list,
             sentinel_thread: thread,
@@ -392,5 +392,22 @@ fn size_class_index_from_size(size: usize) -> usize {
         log - 1
     } else {
         log
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::small_heap::allocate;
+
+    #[test]
+    pub fn general() {
+        env_logger::try_init();
+        let ptr = allocate(8);
+        unsafe {
+            for i in 0..1000 {
+                *(ptr as *mut u64) = i;
+                assert_eq!(*(ptr as *mut u64), i);
+            }
+        }
     }
 }
