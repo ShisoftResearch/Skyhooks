@@ -5,6 +5,7 @@ use core::alloc::Layout;
 use core::mem;
 use std::alloc::GlobalAlloc;
 use std::ops::{Index, IndexMut};
+use crate::utils::alloc_mem;
 
 pub struct FixedVec<T> {
     ptr: *mut T,
@@ -15,9 +16,8 @@ impl<T> FixedVec<T> {
         let obj_size = mem::size_of::<T>();
         let align = mem::align_of::<T>();
         let total_size = obj_size * cap;
-        let layout = Layout::from_size_align(total_size, align).unwrap();
         Self {
-            ptr: unsafe { BumpAllocator.alloc(layout) } as *mut T,
+            ptr: unsafe { alloc_mem::<usize>(total_size) } as *mut T,
         }
     }
 }

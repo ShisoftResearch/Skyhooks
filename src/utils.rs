@@ -1,5 +1,7 @@
 use crate::bump_heap::BumpAllocator;
-use core::alloc::{GlobalAlloc, Layout};
+use core::alloc::{GlobalAlloc, Layout, Alloc};
+use core::ptr::NonNull;
+use alloc::alloc::Global;
 use core::mem;
 use libc::{sysconf, _SC_PAGESIZE};
 use regex::Regex;
@@ -116,14 +118,14 @@ pub fn alloc_mem<T>(size: usize) -> usize {
     let align = mem::align_of::<T>();
     let layout = Layout::from_size_align(size, align).unwrap();
     // must be all zeroed
-    unsafe { BumpAllocator.alloc_zeroed(layout) as usize }
+    unsafe { Global.alloc_zeroed(layout) }.unwrap().as_ptr() as usize
 }
 
 #[inline(always)]
 pub fn dealloc_mem<T>(ptr: usize, size: usize) {
     let align = mem::align_of::<T>();
     let layout = Layout::from_size_align(size, align).unwrap();
-    unsafe { BumpAllocator.dealloc(ptr as *mut u8, layout) }
+    unsafe { Global.dealloc(NonNull::<u8>::new(ptr as *mut u8).unwrap(), layout) }
 }
 
 #[cfg(test)]
