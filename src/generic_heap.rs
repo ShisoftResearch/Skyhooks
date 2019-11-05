@@ -1,7 +1,6 @@
 use super::*;
 use libc::*;
 
-static LARGE_OBJ_THRESHOLD: usize = 1024 * 1024;
 
 lazy_static! {
     static ref LARGE_HEAP: large_heap::Heap = large_heap::Heap::new();
@@ -17,7 +16,7 @@ pub struct ObjectMeta {
 }
 
 pub unsafe fn malloc(size: Size) -> Ptr {
-    if size >= LARGE_OBJ_THRESHOLD {
+    if size >= *small_heap::MAXIMUM_SIZE {
         LARGE_HEAP.allocate(size)
     } else {
         small_heap::allocate(size)

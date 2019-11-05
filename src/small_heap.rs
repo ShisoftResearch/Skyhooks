@@ -32,6 +32,7 @@ lazy_static! {
     static ref HEAP_BASE: usize = mmap_without_fd(*TOTAL_HEAP_SIZE) as usize;
     static ref PER_NODE_META: FixedVec<NodeMeta> = gen_numa_node_list();
     static ref NODE_SHIFT_BITS: usize = log_2_of(*TOTAL_HEAP_SIZE) - log_2_of(*NUM_NUMA_NODES);
+    pub static ref MAXIMUM_SIZE: usize = maximum_size();
 }
 
 struct ThreadMeta {
@@ -393,6 +394,10 @@ fn size_class_index_from_size(size: usize) -> usize {
     } else {
         log
     }
+}
+
+fn maximum_size() -> usize {
+    size_classes()[NUM_SIZE_CLASS - 1].size
 }
 
 #[cfg(test)]
