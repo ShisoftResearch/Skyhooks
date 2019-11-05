@@ -49,16 +49,16 @@ impl<T> List<T> {
                 // either case, retry
                 continue;
             } else {
+                let ptr = pos as *mut T;
                 if page.head.compare_and_swap(pos, next_pos, Relaxed) == pos {
+                    unsafe {
+                        ptr::write(ptr, item);
+                    }
+                    self.count.fetch_add(1, Relaxed);
                     break;
                 }
             }
         }
-        let ptr = pos as *mut T;
-        unsafe {
-            ptr::write(ptr, item);
-        }
-        self.count.fetch_add(1, Relaxed);
     }
 
     pub fn pop(&self) -> Option<T> {
