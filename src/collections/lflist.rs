@@ -4,7 +4,7 @@ use crate::utils::*;
 use core::mem;
 use core::ptr;
 use std::ops::Deref;
-use std::sync::atomic::Ordering::Relaxed;
+use std::sync::atomic::Ordering::{Relaxed, AcqRel};
 use std::sync::atomic::{AtomicPtr, AtomicUsize};
 
 struct BufferMeta<T> {
@@ -50,7 +50,7 @@ impl<T> List<T> {
                 continue;
             } else {
                 let ptr = pos as *mut T;
-                if page.head.compare_and_swap(pos, next_pos, Relaxed) == pos {
+                if page.head.compare_and_swap(pos, next_pos, AcqRel) == pos {
                     unsafe {
                         ptr::write(ptr, item);
                     }
@@ -83,7 +83,7 @@ impl<T> List<T> {
                 continue;
             }
             if new_pos >= page.lower_bound
-                && page.head.compare_and_swap(pos, new_pos, Relaxed) != pos
+                && page.head.compare_and_swap(pos, new_pos, AcqRel) != pos
             {
                 // cannot swap head
                 continue;
