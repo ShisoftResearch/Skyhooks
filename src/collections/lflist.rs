@@ -4,7 +4,7 @@ use crate::utils::*;
 use core::mem;
 use core::ptr;
 use std::ops::Deref;
-use std::sync::atomic::Ordering::{Relaxed, AcqRel};
+use std::sync::atomic::Ordering::{AcqRel, Relaxed};
 use std::sync::atomic::{AtomicPtr, AtomicUsize};
 
 struct BufferMeta<T> {
@@ -37,13 +37,17 @@ impl<T> List<T> {
             page = BufferMeta::borrow(head_ptr);
             pos = page.head.load(Relaxed);
             let next_pos = pos + mem::size_of::<T>();
+            if pos > page.upper_bound {
+                // detect obsolete buffer, try again
+                continue;
+            }
             if next_pos > page.upper_bound {
                 // buffer overflow, make new and link to last buffer
                 let new_head = BufferMeta::new();
                 unsafe {
                     (*new_head).next.store(head_ptr, Relaxed);
                 }
-                if self.head.compare_and_swap(head_ptr, new_head, Relaxed) != head_ptr {
+                if self.head.compare_and_swap(head_ptr, new_head, AcqRel) != head_ptr {
                     BufferMeta::mark_garbage(new_head);
                 }
                 // either case, retry
@@ -75,9 +79,14 @@ impl<T> List<T> {
             if pos == page.lower_bound {
                 // last item, need to remove this head and swap to the next one
                 let next = page.next.load(Relaxed);
-                if next != null_buffer() {
-                    if self.head.compare_and_swap(head_ptr, next, Relaxed) == head_ptr {
+                // CAS page head to four times of the upper bound indicates this buffer is obsolete
+                if next != null_buffer()
+                    && page.head.compare_and_swap(pos, page.upper_bound << 2, Relaxed) == pos
+                {
+                    if self.head.compare_and_swap(head_ptr, next, AcqRel) == head_ptr {
                         BufferMeta::mark_garbage(head_ptr);
+                    } else {
+                        page.head.store(pos, Relaxed);
                     }
                 }
                 continue;
@@ -213,11 +222,14 @@ impl<T> BufferMeta<T> {
         let mut addr = buffer.lower_bound;
         let data_bound = buffer.head.load(Relaxed);
         let mut res = vec![];
-        while addr < data_bound {
-            let ptr = addr as *mut T;
-            let obj = unsafe { ptr::read(ptr) };
-            res.push(obj);
-            addr += size_of_obj;
+        if data_bound <= buffer.upper_bound{
+            // this buffer is not empty
+            while addr < data_bound {
+                let ptr = addr as *mut T;
+                let obj = unsafe { ptr::read(ptr) };
+                res.push(obj);
+                addr += size_of_obj;
+            }
         }
         buffer.head.store(buffer.lower_bound, Relaxed);
         return res;
