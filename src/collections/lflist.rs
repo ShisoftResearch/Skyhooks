@@ -65,6 +65,43 @@ impl<T> List<T> {
         }
     }
 
+    pub fn exclusive_push(&self, item: T) {
+        // user ensure the push is exclusive, thus no CAS except for header
+        let mut pos = 0;
+        let mut page;
+        loop {
+            let head_ptr = self.head.load(Relaxed);
+            page = BufferMeta::borrow(head_ptr);
+            pos = page.head.load(Relaxed);
+            let next_pos = pos + mem::size_of::<T>();
+            if pos > page.upper_bound {
+                // detect obsolete buffer, try again
+                continue;
+            }
+            if next_pos > page.upper_bound {
+                // buffer overflow, make new and link to last buffer
+                let new_head = BufferMeta::new();
+                unsafe {
+                    (*new_head).next.store(head_ptr, Relaxed);
+                }
+                self.head.store(new_head, Relaxed);
+                if self.head.compare_and_swap(head_ptr, new_head, Relaxed) != head_ptr {
+                    BufferMeta::mark_garbage(new_head);
+                }
+                // either case, retry
+                continue;
+            } else {
+                let ptr = pos as *mut T;
+                page.head.store(next_pos, Relaxed);
+                unsafe {
+                    ptr::write(ptr, item);
+                }
+                self.count.fetch_add(1, Relaxed);
+                break;
+            }
+        }
+    }
+
     pub fn pop(&self) -> Option<T> {
         let mut page;
         loop {

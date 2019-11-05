@@ -79,6 +79,6 @@ impl<V: Clone> EvMap<V> {
 
 impl<V> Producer<V> {
     pub fn insert(&self, key: usize, value: V) {
-        self.cache.push((key, value));
+        self.cache.exclusive_push((key, value));
     }
 }
