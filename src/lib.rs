@@ -31,22 +31,25 @@ pub const NULL_PTR: *mut c_void = NULL as *mut c_void;
 use crate::bump_heap::BumpAllocator;
 use core::ffi::c_void;
 
-//#[no_mangle]
-//pub unsafe fn malloc(size: Size) -> Ptr {
-//    api::nu_malloc(size)
-//}
-//
-//#[no_mangle]
-//pub unsafe fn free(ptr: Ptr) {
-//    api::nu_free(ptr)
-//}
-//
-//#[no_mangle]
-//pub unsafe fn calloc(nmemb: Size, size: Size) -> Ptr {
-//    api::nu_calloc(nmemb, size)
-//}
-//
-//#[no_mangle]
-//pub unsafe fn realloc(ptr: Ptr, size: Size) -> Ptr {
-//    api::nu_realloc(ptr, size)
-//}
+#[no_mangle]
+pub unsafe fn malloc(size: Size) -> Ptr {
+    api::nu_malloc(size)
+}
+
+#[no_mangle]
+pub unsafe fn free(ptr: Ptr) {
+    api::nu_free(ptr)
+}
+
+#[no_mangle]
+pub unsafe fn calloc(nmemb: Size, size: Size) -> Ptr {
+    api::nu_calloc(nmemb, size)
+}
+
+#[no_mangle]
+pub unsafe fn realloc(ptr: Ptr, size: Size) -> Ptr {
+    api::nu_realloc(ptr, size)
+}
+
+#[global_allocator]
+static INNER_ALLOCATOR: BumpAllocator = BumpAllocator;
