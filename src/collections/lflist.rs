@@ -134,6 +134,7 @@ impl<T> List<T> {
                 if page.head.compare_and_swap(pos, new_pos, SeqCst) != pos
                 {
                     // cannot swap head
+                    mem::forget(res.unwrap()); // won't call drop for this one
                     continue;
                 }
             }
