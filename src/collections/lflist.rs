@@ -48,7 +48,7 @@ impl<T> List<T> {
                     (*new_head).next.store(head_ptr, Relaxed);
                 }
                 if self.head.compare_and_swap(head_ptr, new_head, Relaxed) != head_ptr {
-                    BufferMeta::mark_garbage(new_head);
+                    BufferMeta::unref(new_head);
                 }
                 // either case, retry
                 continue;
@@ -86,7 +86,7 @@ impl<T> List<T> {
                 }
                 self.head.store(new_head, Relaxed);
                 if self.head.compare_and_swap(head_ptr, new_head, Relaxed) != head_ptr {
-                    BufferMeta::mark_garbage(new_head);
+                    BufferMeta::unref(new_head);
                 }
                 // either case, retry
                 continue;
@@ -121,7 +121,7 @@ impl<T> List<T> {
                     && page.head.compare_and_swap(pos, page.upper_bound << 2, Relaxed) == pos
                 {
                     if self.head.compare_and_swap(head_ptr, next, Relaxed) == head_ptr {
-                        BufferMeta::mark_garbage(head_ptr);
+                        BufferMeta::unref(head_ptr);
                     } else {
                         page.head.store(pos, Relaxed);
                     }
@@ -154,14 +154,16 @@ impl<T> List<T> {
                 let rc = buffer.refs.load(Relaxed);
                 if rc == 2 {
                     break;
-                } else if rc == 1 {
+                } else if rc <= 1 {
                     // means the buffer have already been mark as garbage, should skip this one
                     buffer_ptr = next_ptr;
                     continue 'main;
+                } else {
+                    continue
                 }
             }
             res.append(&mut BufferMeta::flush_buffer(&*buffer));
-            BufferMeta::mark_garbage(buffer_ptr);
+            BufferMeta::unref(buffer_ptr);
             buffer_ptr = next_ptr;
         }
         self.count.fetch_sub(res.len(), Relaxed);
@@ -214,7 +216,7 @@ impl<T> Drop for List<T> {
             let mut node_ptr = self.head.load(Relaxed);
             while node_ptr as usize != 0 {
                 let next_ptr = (&*node_ptr).next.load(Relaxed);
-                BufferMeta::mark_garbage(node_ptr);
+                BufferMeta::unref(node_ptr);
                 node_ptr = next_ptr;
             }
         }
@@ -237,10 +239,19 @@ impl<T> BufferMeta<T> {
         head_page
     }
 
-    pub fn mark_garbage(buffer: *mut BufferMeta<T>) {
+    pub fn unref(buffer: *mut BufferMeta<T>) {
         {
             let buffer = unsafe { &*buffer };
-            buffer.refs.fetch_sub(1, Relaxed);
+            loop {
+                let rc = buffer.refs.load(Relaxed);
+                if rc >= 1 {
+                    if buffer.refs.compare_and_swap(rc, rc - 1, Relaxed) == rc {
+                        break
+                    }
+                } else {
+                    break;
+                }
+            }
         }
         Self::check_gc(buffer);
     }
@@ -291,10 +302,7 @@ struct BufferRef<T> {
 
 impl<T> Drop for BufferRef<T> {
     fn drop(&mut self) {
-        {
-            let buffer = unsafe { &*self.ptr };
-            buffer.refs.fetch_sub(1, Relaxed);
-        }
+        BufferMeta::unref(self.ptr);
         BufferMeta::check_gc(self.ptr);
     }
 }

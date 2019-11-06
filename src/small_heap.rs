@@ -394,8 +394,9 @@ fn addr_numa_id(addr: usize) -> usize {
 
 #[inline]
 fn size_class_index_from_size(size: usize) -> usize {
+    debug_assert!(size > 0);
     let log = log_2_of(size);
-    if is_power_of_2(size) {
+    if is_power_of_2(size) && log > 0 {
         log - 1
     } else {
         log
