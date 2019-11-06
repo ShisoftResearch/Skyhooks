@@ -29,7 +29,9 @@ thread_local! {
 
 lazy_static! {
     static ref TOTAL_HEAP_SIZE: usize = total_heap();
-    static ref HEAP_BASE: usize = mmap_without_fd(*TOTAL_HEAP_SIZE) as usize;
+    static ref HEAP_BASE: usize = {
+        mmap_without_fd(*TOTAL_HEAP_SIZE) as usize
+    };
     static ref PER_NODE_META: FixedVec<NodeMeta> = gen_numa_node_list();
     static ref NODE_SHIFT_BITS: usize = log_2_of(*TOTAL_HEAP_SIZE) - log_2_of(*NUM_NUMA_NODES);
     pub static ref MAXIMUM_SIZE: usize = maximum_size();
@@ -184,15 +186,18 @@ impl ThreadMeta {
 // Return thread resource to global
 impl Drop for ThreadMeta {
     fn drop(&mut self) {
-        let numa_id = self.numa;
-        let numa = &PER_NODE_META[numa_id];
-        numa.objects.remove_producer(&self.objects);
-        numa.thread_free.remove(self.tid);
-        for (i, size_class) in self.sizes.into_iter().enumerate() {
-            let common = &numa.common[i];
-            common.reserved.push(size_class.reserved.clone());
-            common.free_list.prepend_with(&size_class.free_list);
-        }
+        api::INNER_CALL.with(|is_inner| {
+            is_inner.store(true, Relaxed);
+            let numa_id = self.numa;
+            let numa = &PER_NODE_META[numa_id];
+            numa.objects.remove_producer(&self.objects);
+            numa.thread_free.remove(self.tid);
+            for (i, size_class) in self.sizes.into_iter().enumerate() {
+                let common = &numa.common[i];
+                common.reserved.push(size_class.reserved.clone());
+                common.free_list.prepend_with(&size_class.free_list);
+            }
+        });
     }
 }
 
@@ -383,6 +388,7 @@ fn log_2_of(num: usize) -> usize {
 
 #[inline]
 fn addr_numa_id(addr: usize) -> usize {
+    debug_assert!(addr >= *HEAP_BASE, "{} v.s {}", addr, *HEAP_BASE);
     (addr - *HEAP_BASE) >> *NODE_SHIFT_BITS
 }
 

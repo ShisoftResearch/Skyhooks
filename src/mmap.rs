@@ -1,6 +1,7 @@
 use super::*;
 use core::ptr;
 use libc::*;
+use errno::errno;
 
 const MADV_NOHUGEPAGE: c_int = 14;
 
@@ -16,7 +17,8 @@ pub fn mmap_without_fd(size: usize) -> Ptr {
         )
     };
     if ptr == -1 as isize as *mut c_void {
-        panic!("mmap failed {}");
+        let err = errno();
+        panic!("mmap failed: [{}] {}", err.0, err);
     };
     no_huge_page(ptr, size);
     ptr

@@ -9,14 +9,17 @@
 
 use crate::mmap::{dealloc_regional, mmap_without_fd, munmap_memory};
 use crate::utils::*;
-use crate::Ptr;
-use core::alloc::{GlobalAlloc, Layout};
+use crate::{Ptr, Size, NULL_PTR};
+use core::alloc::{GlobalAlloc, Layout, Alloc, AllocErr};
 use core::sync::atomic::Ordering::Relaxed;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use core::{mem, ptr};
+use lfmap::Map;
+use libc::memcpy;
 
 lazy_static! {
     static ref ALLOC_INNER: AllocatorInner = AllocatorInner::new();
+    static ref MALLOC_SIZE: lfmap::WordMap<BumpAllocator> = lfmap::WordMap::<BumpAllocator>::with_capacity(1024);
 }
 
 pub struct AllocatorInner {
@@ -99,15 +102,24 @@ unsafe impl GlobalAlloc for AllocatorInner {
         // use system call to invalidate underlying physical memory (pages)
         debug!("Dealloc {}", ptr as usize);
         // Will not dealloc objects smaller than half page size
-        if layout.size() < (*SYS_PAGE_SIZE >> 1) {
+        if layout.size() < (*SYS_PAGE_SIZE) {
             return;
         }
         let ptr_pos = ptr as usize;
         let start_pos = ptr_pos - mem::size_of::<usize>();
         let starts = ptr::read(start_pos as *const usize);
         let padding = ptr_pos - starts;
-        debug_assert!(starts >= self.addr.load(Relaxed));
         dealloc_regional(starts as Ptr, layout.size() + padding);
+    }
+}
+
+unsafe impl Alloc for BumpAllocator {
+    unsafe fn alloc(&mut self, layout: Layout) -> Result<ptr::NonNull<u8>, AllocErr> {
+        Ok(ptr::NonNull::new(ALLOC_INNER.alloc(layout)).unwrap())
+    }
+
+    unsafe fn dealloc(&mut self, ptr: ptr::NonNull<u8>, layout: Layout) {
+        ALLOC_INNER.dealloc(ptr.as_ptr(), layout)
     }
 }
 
@@ -121,4 +133,45 @@ unsafe impl GlobalAlloc for BumpAllocator {
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         ALLOC_INNER.dealloc(ptr, layout)
     }
+}
+
+impl Default for BumpAllocator {
+    fn default() -> Self { Self }
+}
+
+pub unsafe fn malloc(size: Size) -> Ptr {
+    let layout = Layout::from_size_align(size, 1).unwrap();
+    let ptr = BumpAllocator.alloc(layout) as Ptr;
+    MALLOC_SIZE.insert(ptr as usize, size as usize);
+    ptr
+}
+pub unsafe fn free(ptr: Ptr) {
+    if let Some(size) = MALLOC_SIZE.remove(ptr as usize) {
+        let layout = Layout::from_size_align(size, 1).unwrap();
+        BumpAllocator.dealloc(ptr as *mut u8, layout);
+    }
+}
+
+pub unsafe fn realloc(ptr: Ptr, size: Size) -> Ptr {
+    if ptr == NULL_PTR {
+        return malloc(size);
+    }
+    if size == 0 {
+        free(ptr);
+        return NULL_PTR;
+    }
+    let old_size = if let Some(size) = MALLOC_SIZE.get(ptr as usize) {
+        size
+    } else {
+        warn!("Cannot determinate old object");
+        return NULL_PTR;
+    };
+    if old_size >= size {
+        info!("old size is larger than requesting size, untouched");
+        return ptr;
+    }
+    let new_ptr = malloc(size);
+    memcpy(new_ptr, ptr, old_size);
+    free(ptr);
+    new_ptr
 }

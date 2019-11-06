@@ -7,7 +7,6 @@ use libc::{sysconf, _SC_PAGESIZE};
 use regex::Regex;
 use std::collections::HashMap;
 use std::fs::read_dir;
-use sysinfo::SystemExt;
 
 lazy_static! {
     pub static ref SYS_PAGE_SIZE: usize = unsafe { sysconf(_SC_PAGESIZE) as usize };
@@ -75,9 +74,8 @@ pub fn num_numa_nodes() -> usize {
 }
 
 pub fn total_memory() -> usize {
-    let mut system = sysinfo::System::new();
-    system.refresh_system();
-    system.get_total_memory() as usize * 1024 // in bytes
+    let mem_info = sys_info::mem_info().unwrap();
+    mem_info.avail as usize * 1024 // in bytes
 }
 
 #[cfg(target_os = "linux")]
