@@ -128,14 +128,17 @@ impl<T> List<T> {
                 }
                 continue;
             }
-            if new_pos >= page.lower_bound
-                && page.head.compare_and_swap(pos, new_pos, SeqCst) != pos
-            {
-                // cannot swap head
-                continue;
+            let mut res = None;
+            if new_pos >= page.lower_bound{
+                res = Some(unsafe { ptr::read(new_pos as *mut T) });
+                if page.head.compare_and_swap(pos, new_pos, SeqCst) != pos
+                {
+                    // cannot swap head
+                    continue;
+                }
             }
             self.count.fetch_sub(1, Relaxed);
-            return Some(unsafe { ptr::read(new_pos as *mut T) });
+            return res;
         }
     }
     pub fn drop_out_all(&self) -> Vec<T> {
