@@ -3,6 +3,7 @@ use core::alloc::{GlobalAlloc, Layout};
 use libc::*;
 use lfmap::{Map, WordMap};
 use crate::utils::align_padding;
+use crate::mmap_heap::*;
 use core::sync::atomic::AtomicBool;
 use core::sync::atomic::Ordering::Relaxed;
 
@@ -10,7 +11,7 @@ thread_local! {
     pub static INNER_CALL: AtomicBool = AtomicBool::new(false);
 }
 lazy_static! {
-    static ref RUST_ADDR_MAPPING: lfmap::WordMap = lfmap::WordMap::with_capacity(2048);
+    static ref RUST_ADDR_MAPPING: lfmap::WordMap<MmapAllocator> = lfmap::WordMap::<MmapAllocator>::with_capacity(2048);
 }
 
 pub unsafe fn nu_malloc(size: Size) -> Ptr {

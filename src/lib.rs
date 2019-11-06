@@ -19,6 +19,7 @@ mod large_heap;
 mod mmap;
 mod small_heap;
 mod utils;
+mod mmap_heap;
 
 mod collections;
 

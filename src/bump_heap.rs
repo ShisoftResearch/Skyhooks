@@ -10,6 +10,7 @@
 use crate::mmap::{dealloc_regional, mmap_without_fd, munmap_memory};
 use crate::utils::*;
 use crate::{Ptr, Size, NULL_PTR};
+use crate::mmap_heap::*;
 use core::alloc::{GlobalAlloc, Layout, Alloc, AllocErr};
 use core::sync::atomic::Ordering::Relaxed;
 use core::sync::atomic::{AtomicUsize, Ordering};
@@ -19,7 +20,7 @@ use libc::memcpy;
 
 lazy_static! {
     static ref ALLOC_INNER: AllocatorInner = AllocatorInner::new();
-    static ref MALLOC_SIZE: lfmap::WordMap<BumpAllocator> = lfmap::WordMap::<BumpAllocator>::with_capacity(1024);
+    static ref MALLOC_SIZE: lfmap::WordMap<MmapAllocator> = lfmap::WordMap::<MmapAllocator>::with_capacity(1024);
 }
 
 pub struct AllocatorInner {
