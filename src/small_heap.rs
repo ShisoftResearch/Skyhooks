@@ -109,6 +109,7 @@ pub fn allocate(size: usize) -> Ptr {
 pub fn contains(ptr: Ptr) -> bool {
     let addr = ptr as usize;
     let node_id = addr_numa_id(addr);
+    if node_id > *NUM_NUMA_NODES - 1 { return false; }
     let node = &PER_NODE_META[node_id];
     node.objects.refresh();
     node.objects.contains(addr)
@@ -121,6 +122,7 @@ pub fn free(ptr: Ptr) -> bool {
     THREAD_META.with(|meta| {
         let current_node = meta.numa;
         let node_id = addr_numa_id(addr);
+        if node_id > *NUM_NUMA_NODES - 1 { return false; }
         let node = &PER_NODE_META[node_id];
         node.objects.refresh();
         if node_id != current_node {
@@ -153,6 +155,7 @@ pub fn free(ptr: Ptr) -> bool {
 pub fn size_of(ptr: Ptr) -> Option<usize> {
     let addr = ptr as usize;
     let node_id = addr_numa_id(addr);
+    if node_id > *NUM_NUMA_NODES - 1 { return None; }
     let node_meta = &PER_NODE_META[node_id];
     node_meta.objects.refresh();
     node_meta.objects.get(addr).map(|o| o.size)
@@ -399,11 +402,9 @@ fn log_2_of(num: usize) -> usize {
 
 #[inline]
 fn addr_numa_id(addr: usize) -> usize {
-    debug_assert!(addr >= *HEAP_BASE, "{} v.s {}", addr, *HEAP_BASE);
     let offset = addr - *HEAP_BASE;
     let shift_bits = *NODE_SHIFT_BITS;
     let res = offset >> shift_bits;
-    debug_assert!(res <= *NUM_NUMA_NODES - 1);
     res
 }
 

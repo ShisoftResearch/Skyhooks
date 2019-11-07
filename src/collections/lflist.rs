@@ -110,6 +110,10 @@ impl<T> List<T> {
             let pos = page.head.load(Relaxed);
             let obj_size = mem::size_of::<T>();
             let new_pos = pos - obj_size;
+            if pos > page.upper_bound << 1 {
+                // detect obsolete buffer, try again
+                continue;
+            }
             if pos == page.lower_bound && page.next.load(Relaxed) == null_buffer() {
                 // empty buffer chain
                 return None;
@@ -138,6 +142,8 @@ impl<T> List<T> {
                     mem::forget(res.unwrap()); // won't call drop for this one
                     continue;
                 }
+            } else {
+                continue;
             }
             self.count.fetch_sub(1, Relaxed);
             return res;
