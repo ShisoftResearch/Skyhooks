@@ -204,7 +204,9 @@ impl Drop for ThreadMeta {
                 if reserved_addr > 0 && reserved_pos < reserved_addr + page_size {
                     common.reserved.push(reserved.clone());
                 }
-                common.free_list.prepend_with(&size_class.free_list);
+                if size_class.free_list.count() > 0 {
+                    common.free_list.prepend_with(&size_class.free_list);
+                }
             }
         });
     }
