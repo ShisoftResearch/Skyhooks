@@ -179,6 +179,7 @@ impl<T> List<T> {
 
     pub fn prepend_with(&self, other: &Self) {
         let other_head = other.head.swap(BufferMeta::new(), Relaxed);
+        let other_count = other.count.swap(0, Relaxed);
         let mut other_tail = BufferMeta::borrow(other_head);
         // probe the last buffer in other link
         loop {
@@ -200,7 +201,7 @@ impl<T> List<T> {
                 break;
             }
         }
-        self.count.fetch_add(other.count.swap(0, Relaxed), Relaxed);
+        self.count.fetch_add(other_count, Relaxed);
     }
 
     pub fn count(&self) -> usize {
