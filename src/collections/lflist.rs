@@ -108,7 +108,8 @@ impl<T> List<T> {
             let head_ptr = self.head.load(Relaxed);
             page = BufferMeta::borrow(head_ptr);
             let pos = page.head.load(Relaxed);
-            let new_pos = pos - mem::size_of::<T>();
+            let obj_size = mem::size_of::<T>();
+            let new_pos = pos - obj_size;
             if pos == page.lower_bound && page.next.load(Relaxed) == null_buffer() {
                 // empty buffer chain
                 return None;

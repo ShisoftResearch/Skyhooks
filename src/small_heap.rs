@@ -15,6 +15,7 @@ use std::os::unix::thread::JoinHandleExt;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;
 use std::thread;
+use std::clone::Clone;
 
 const NUM_SIZE_CLASS: usize = 16;
 
@@ -188,6 +189,7 @@ impl ThreadMeta {
 // Return thread resource to global
 impl Drop for ThreadMeta {
     fn drop(&mut self) {
+        let page_size = *SYS_PAGE_SIZE;
         api::INNER_CALL.with(|is_inner| {
             is_inner.store(true, Relaxed);
             let numa_id = self.numa;
@@ -196,7 +198,12 @@ impl Drop for ThreadMeta {
             numa.thread_free.remove(self.tid);
             for (i, size_class) in self.sizes.into_iter().enumerate() {
                 let common = &numa.common[i];
-                common.reserved.push(size_class.reserved.clone());
+                let reserved = &size_class.reserved;
+                let reserved_addr = *reserved.addr.borrow();
+                let reserved_pos = *reserved.pos.borrow();
+                if reserved_addr > 0 && reserved_pos < reserved_addr + page_size {
+                    common.reserved.push(reserved.clone());
+                }
                 common.free_list.prepend_with(&size_class.free_list);
             }
         });
