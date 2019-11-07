@@ -113,8 +113,11 @@ pub fn contains(ptr: Ptr) -> bool {
     node.objects.contains(addr)
 }
 pub fn free(ptr: Ptr) -> bool {
+    let addr = ptr as usize;
+    if addr < *HEAP_BASE || addr > *HEAP_UPPER_BOUND {
+        return false;
+    }
     THREAD_META.with(|meta| {
-        let addr = ptr as usize;
         let current_node = meta.numa;
         let node_id = addr_numa_id(addr);
         let node = &PER_NODE_META[node_id];

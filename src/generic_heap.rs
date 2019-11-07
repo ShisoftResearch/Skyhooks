@@ -27,7 +27,7 @@ pub unsafe fn free(ptr: Ptr) {
     if !small_heap::free(ptr) {
     } else if !LARGE_HEAP.free(ptr) {
     } else {
-        warn!("Ptr {} does not existed", ptr as usize)
+        bump_heap::free(ptr)
     }
 }
 
