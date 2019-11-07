@@ -6,6 +6,7 @@ use crate::utils::align_padding;
 use crate::mmap_heap::*;
 use core::sync::atomic::AtomicBool;
 use core::sync::atomic::Ordering::Relaxed;
+use std::ptr::null_mut;
 
 thread_local! {
     pub static INNER_CALL: AtomicBool = AtomicBool::new(false);
@@ -42,7 +43,7 @@ pub unsafe fn nu_free(ptr: Ptr) {
 pub unsafe fn nu_calloc(nmemb: Size, size: Size) -> Ptr {
     let total_size = nmemb * size;
     let ptr = nu_malloc(total_size);
-    if ptr == NULL_PTR {
+    if ptr != NULL_PTR {
         memset(ptr, 0, total_size);
     }
     ptr

@@ -28,7 +28,7 @@ pub struct AllocatorInner {
     addr: AtomicUsize,
 }
 
-const HEAP_VIRT_SIZE: usize = 2 * 1024 * 1024 * 1024; // 2GB
+pub const HEAP_VIRT_SIZE: usize = 2 * 1024 * 1024 * 1024; // 2GB
 
 fn allocate_address_space() -> Ptr {
     mmap_without_fd(HEAP_VIRT_SIZE)
@@ -146,11 +146,18 @@ pub unsafe fn malloc(size: Size) -> Ptr {
     MALLOC_SIZE.insert(ptr as usize, size as usize);
     ptr
 }
-pub unsafe fn free(ptr: Ptr) {
+pub unsafe fn free(ptr: Ptr) -> bool {
     if let Some(size) = MALLOC_SIZE.remove(ptr as usize) {
         let layout = Layout::from_size_align(size, 1).unwrap();
         BumpAllocator.dealloc(ptr as *mut u8, layout);
+        true
+    } else {
+        false
     }
+}
+
+pub fn size_of(ptr: Ptr) -> Option<usize> {
+    MALLOC_SIZE.get(ptr as usize)
 }
 
 pub unsafe fn realloc(ptr: Ptr, size: Size) -> Ptr {

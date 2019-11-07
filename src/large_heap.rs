@@ -1,48 +1,23 @@
-use super::*;
-use crate::generic_heap::ObjectMeta;
-use crate::mmap::mmap_without_fd;
-use crate::utils::*;
-use lfmap::{Map, ObjectMap};
-use mmap::munmap_memory;
-
 // Heap for large objects exceeds maximum tier of pages
-// The large heap will only track its existence and use mmap allocate
-// and munmap to return resource to the OS
+// Use bump heap
 
-pub struct Heap {
-    meta: ObjectMap<ObjectMeta>,
+use crate::Ptr;
+use crate::utils::align_padding;
+use crate::utils::SYS_PAGE_SIZE;
+
+pub unsafe fn allocate(size: usize) -> Ptr {
+    let page_size = *SYS_PAGE_SIZE;
+    let padding = align_padding(size, page_size);
+    let total_size = size + padding;
+    if total_size < crate::bump_heap::HEAP_VIRT_SIZE {
+        crate::bump_heap::malloc(total_size)
+    } else {
+        unimplemented!()
+    }
 }
-
-impl Heap {
-    pub fn new() -> Self {
-        Self {
-            meta: ObjectMap::with_capacity(512),
-        }
-    }
-    pub unsafe fn allocate(&self, size: usize) -> Ptr {
-        let padding = align_padding(size, *SYS_PAGE_SIZE);
-        let page_size = size + padding;
-        let ptr = mmap_without_fd(page_size) as usize;
-        let meta = ObjectMeta {
-            size,
-            addr: ptr,
-            // large heap don't care following fields
-            numa: 0,
-            tier: 0,
-            tid: 0,
-        };
-        self.meta.insert(ptr, meta);
-        ptr as Ptr
-    }
-    pub fn free(&self, ptr: Ptr) -> bool {
-        if let Some(meta) = self.meta.remove(ptr as usize) {
-            munmap_memory(ptr, meta.size);
-            true
-        } else {
-            false
-        }
-    }
-    pub fn size_of(&self, ptr: Ptr) -> Option<usize> {
-        self.meta.get(ptr as usize).map(|m| m.size)
-    }
+pub unsafe fn free(ptr: Ptr) -> bool {
+    crate::bump_heap::free(ptr)
+}
+pub fn size_of(ptr: Ptr) -> Option<usize> {
+    crate::bump_heap::size_of(ptr)
 }

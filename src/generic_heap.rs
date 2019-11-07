@@ -1,10 +1,6 @@
 use super::*;
 use libc::*;
-
-
-lazy_static! {
-    static ref LARGE_HEAP: large_heap::Heap = large_heap::Heap::new();
-}
+use std::ptr::null_mut;
 
 #[derive(Copy, Clone)]
 pub struct ObjectMeta {
@@ -16,18 +12,23 @@ pub struct ObjectMeta {
 }
 
 pub unsafe fn malloc(size: Size) -> Ptr {
-    if size >= *small_heap::MAXIMUM_SIZE {
-        LARGE_HEAP.allocate(size)
+    let max_small_size = *small_heap::MAXIMUM_SIZE;
+    let res = if size > max_small_size {
+        large_heap::allocate(size)
     } else {
         small_heap::allocate(size)
+    };
+    if res == null_mut() {
+        panic!();
     }
+    res
 }
 
 pub unsafe fn free(ptr: Ptr) {
     if !small_heap::free(ptr) {
-    } else if !LARGE_HEAP.free(ptr) {
+    } else if !large_heap::free(ptr) {
     } else {
-        bump_heap::free(ptr)
+        warn!("Cannot find object to free at {:x?}", ptr as usize);
     }
 }
 
@@ -41,7 +42,7 @@ pub unsafe fn realloc(ptr: Ptr, size: Size) -> Ptr {
     }
     let old_size = if let Some(size) = small_heap::size_of(ptr) {
         size
-    } else if let Some(_) = LARGE_HEAP.size_of(ptr) {
+    } else if let Some(_) = large_heap::size_of(ptr) {
         size
     } else {
         warn!("Cannot determinate old object");
