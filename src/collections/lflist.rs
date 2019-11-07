@@ -4,7 +4,7 @@ use crate::utils::*;
 use core::mem;
 use core::ptr;
 use std::ops::Deref;
-use std::sync::atomic::Ordering::{AcqRel, Relaxed, SeqCst};
+use std::sync::atomic::Ordering::{Relaxed};
 use std::sync::atomic::{AtomicPtr, AtomicUsize};
 
 struct BufferMeta<T> {
@@ -54,7 +54,7 @@ impl<T> List<T> {
                 continue;
             } else {
                 let ptr = pos as *mut T;
-                if page.head.compare_and_swap(pos, next_pos, SeqCst) == pos {
+                if page.head.compare_and_swap(pos, next_pos, Relaxed) == pos {
                     unsafe {
                         ptr::write(ptr, item);
                     }
@@ -136,7 +136,7 @@ impl<T> List<T> {
             let mut res = None;
             if new_pos >= page.lower_bound{
                 res = Some(unsafe { ptr::read(new_pos as *mut T) });
-                if page.head.compare_and_swap(pos, new_pos, SeqCst) != pos
+                if page.head.compare_and_swap(pos, new_pos, Relaxed) != pos
                 {
                     // cannot swap head
                     mem::forget(res.unwrap()); // won't call drop for this one
@@ -178,38 +178,29 @@ impl<T> List<T> {
     }
 
     pub fn prepend_with(&self, other: &Self) {
-        let other_head = other.head.load(Relaxed);
+        let other_head = other.head.swap(BufferMeta::new(), Relaxed);
+        let mut other_tail = BufferMeta::borrow(other_head);
+        // probe the last buffer in other link
         loop {
-            let mut other_tail = BufferMeta::borrow(other_head);
-            // probe the last buffer in other link
-            loop {
-                let next_ptr = other_tail.next.load(Relaxed);
-                if next_ptr == null_buffer() {
-                    break;
-                }
-                other_tail = BufferMeta::borrow(next_ptr);
+            while other_tail.refs.load(Relaxed) > 2 {}
+            let next_ptr = other_tail.next.load(Relaxed);
+            if next_ptr == null_buffer() {
+                break;
             }
+            other_tail = BufferMeta::borrow(next_ptr);
+        }
+
+        // CAS this head to other head then reset other tail next buffer to this head
+        loop {
             let this_head = self.head.load(Relaxed);
-            if other_tail
-                .next
-                .compare_and_swap(null_buffer(), this_head, Relaxed)
-                != null_buffer()
-            {
-                panic!()
-            }
             if self.head.compare_and_swap(this_head, other_head, Relaxed) != this_head {
                 continue;
+            } else {
+                other_tail.next.store(this_head, Relaxed);
+                break;
             }
-            break;
         }
-        if other
-            .head
-            .compare_and_swap(other_head, BufferMeta::new(), Relaxed)
-            != other_head
-        {
-            panic!() // TODO: deal with this one, should not happened in current use case
-        }
-        self.count.fetch_add(other.count.load(Relaxed), Relaxed);
+        self.count.fetch_add(other.count.swap(0, Relaxed), Relaxed);
     }
 
     pub fn count(&self) -> usize {
@@ -247,31 +238,18 @@ impl<T> BufferMeta<T> {
     }
 
     pub fn unref(buffer: *mut BufferMeta<T>) {
-        {
+        let rc = {
             let buffer = unsafe { &*buffer };
-            loop {
-                let rc = buffer.refs.load(Relaxed);
-                if rc >= 1 {
-                    if buffer.refs.compare_and_swap(rc, rc - 1, Relaxed) == rc {
-                        break
-                    }
-                } else {
-                    break;
-                }
-            }
+            buffer.refs.fetch_sub(1, Relaxed)
+        };
+        if rc == 1 {
+            Self::gc(buffer);
         }
-        Self::check_gc(buffer);
     }
 
-    fn check_gc(buffer: *mut BufferMeta<T>) {
-        {
-            let buffer = unsafe { &*buffer };
-            if buffer.refs.compare_and_swap(0, std::usize::MAX, Relaxed) != 0 {
-                return;
-            }
-            for obj in Self::flush_buffer(buffer) {
-                drop(obj)
-            }
+    fn gc(buffer: *mut BufferMeta<T>) {
+        for obj in Self::flush_buffer(unsafe { &*buffer }) {
+            drop(obj)
         }
         dealloc_mem::<usize>(buffer as usize, *SYS_PAGE_SIZE)
     }
@@ -310,7 +288,6 @@ struct BufferRef<T> {
 impl<T> Drop for BufferRef<T> {
     fn drop(&mut self) {
         BufferMeta::unref(self.ptr);
-        BufferMeta::check_gc(self.ptr);
     }
 }
 

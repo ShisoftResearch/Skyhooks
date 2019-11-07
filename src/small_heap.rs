@@ -73,7 +73,7 @@ struct ReservedPage {
 
 struct RemoteNodeFree {
     pending_free: Arc<lflist::List<usize>>,
-    sentinel_thread: thread::Thread,
+    // sentinel_thread: thread::Thread,
 }
 
 pub fn allocate(size: usize) -> Ptr {
@@ -122,6 +122,9 @@ pub fn free(ptr: Ptr) -> bool {
     THREAD_META.with(|meta| {
         let current_node = meta.numa;
         node.objects.refresh();
+        if let Some(pending_free) = &PER_NODE_META[current_node].pending_free {
+            pending_free.free_all();
+        }
         if node_id != current_node {
             // append address to remote node if this address does not belong to current node
             let contains_obj = node.objects.contains(addr);
@@ -290,36 +293,52 @@ impl ReservedPage {
 impl RemoteNodeFree {
     pub fn new(node_id: usize) -> Self {
         let list = Arc::new(lflist::List::new());
-        let list_clone = list.clone();
-        let handle = thread::Builder::new()
-            .name(format!("remote-free-{}", node_id))
-            .spawn(move || {
-                loop {
-                    if let Some(addr) = list_clone.pop() {
-                        debug_assert_eq!(
-                            addr_numa_id(addr),
-                            node_id,
-                            "Node freeing remote pending object"
-                        );
-                        free(addr as Ptr);
-                    } else {
-                        thread::park();
-                    }
-                }
-            })
-            .unwrap();
-        let pthread = handle.as_pthread_t();
-        let thread = handle.thread().clone();
-        set_node_affinity(node_id, pthread as u64);
+        // The original design is to have a sentinel thread for each NUMA node to
+        // do the free job. The problem is, in Linux, creating thread also invokes malloc and friends,
+        // does not work well with thread local storage as well.
+        // Thus, I have to abandon this approach and free by invoking free function from threads
+        // within this NUMA node. Which is sad :(
+//        let list_clone = list.clone();
+//        let handle = thread::Builder::new()
+//            .name(format!("remote-free-{}", node_id))
+//            .spawn(move || {
+//                loop {
+//                    if let Some(addr) = list_clone.pop() {
+//                        debug_assert_eq!(
+//                            addr_numa_id(addr),
+//                            node_id,
+//                            "Node freeing remote pending object"
+//                        );
+//                        free(addr as Ptr);
+//                    } else {
+//                        thread::park();
+//                    }
+//                }
+//            })
+//            .unwrap();
+//        let pthread = handle.as_pthread_t();
+//        let thread = handle.thread().clone();
+//        set_node_affinity(node_id, pthread as u64);
         Self {
             pending_free: list,
-            sentinel_thread: thread,
+            // sentinel_thread: thread,
         }
     }
 
     pub fn push(&self, addr: usize) {
         self.pending_free.push(addr as usize);
-        self.sentinel_thread.unpark();
+        // self.sentinel_thread.unpark();
+    }
+
+    pub fn free_all(&self) {
+        while let Some(addr) = self.pending_free.pop() {
+            debug_assert_eq!(
+                addr_numa_id(addr),
+                current_numa(),
+                "Node freeing remote pending object"
+            );
+            free(addr as Ptr);
+        }
     }
 }
 
@@ -435,7 +454,7 @@ fn maximum_size() -> usize {
 
 #[inline(always)]
 pub fn warm_up() {
-    let _ = *PER_NODE_META;
+    // let _ = *PER_NODE_META;
 }
 
 #[cfg(test)]
