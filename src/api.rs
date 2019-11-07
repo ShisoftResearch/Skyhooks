@@ -16,6 +16,7 @@ lazy_static! {
 }
 
 pub unsafe fn nu_malloc(size: Size) -> Ptr {
+    if size == 0 { return null_mut(); } // The C standard (C17 7.22.3/1)
     INNER_CALL.with(|is_inner| {
         if !is_inner.load(Relaxed) {
             is_inner.store(true, Relaxed);
@@ -30,6 +31,7 @@ pub unsafe fn nu_malloc(size: Size) -> Ptr {
 
 }
 pub unsafe fn nu_free(ptr: Ptr) {
+    if ptr == null_mut() { return; }
     INNER_CALL.with(|is_inner| {
         if !is_inner.load(Relaxed) {
             is_inner.store(true, Relaxed);

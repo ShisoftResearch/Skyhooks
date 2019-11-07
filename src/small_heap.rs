@@ -78,6 +78,7 @@ struct RemoteNodeFree {
 
 pub fn allocate(size: usize) -> Ptr {
     let size_class_index = size_class_index_from_size(size);
+    debug_assert!(size <= *MAXIMUM_SIZE);
     THREAD_META.with(|meta| {
         let size_class = &meta.sizes[size_class_index];
         // allocate memory inside the thread meta
@@ -397,7 +398,7 @@ fn thread_free_lists(size_classes: &TSizeClasses) -> TThreadFreeLists {
 
 #[inline]
 fn per_node_heap() -> usize {
-    min_power_of_2(*SYS_TOTAL_MEM)
+    min_power_of_2(64 * 1024 * 1024 * 1024)
 }
 
 fn total_heap() -> usize {
