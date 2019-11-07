@@ -69,6 +69,7 @@ pub fn cpu_topology() -> HashMap<usize, usize> {
 
 pub fn num_numa_nodes() -> usize {
     let mut vec = SYS_CPU_NODE.iter().map(|(_, v)| *v).collect::<Vec<_>>();
+    vec.sort();
     vec.dedup();
     vec.len()
 }

@@ -29,11 +29,10 @@ thread_local! {
 
 lazy_static! {
     static ref TOTAL_HEAP_SIZE: usize = total_heap();
-    static ref HEAP_BASE: usize = {
-        mmap_without_fd(*TOTAL_HEAP_SIZE) as usize
-    };
+    static ref HEAP_BASE: usize = mmap_without_fd(*TOTAL_HEAP_SIZE) as usize;
+    static ref HEAP_UPPER_BOUND = *HEAP_BASE + *TOTAL_HEAP_SIZE;
     static ref PER_NODE_META: FixedVec<NodeMeta> = gen_numa_node_list();
-    static ref NODE_SHIFT_BITS: usize = log_2_of(*TOTAL_HEAP_SIZE) - log_2_of(*NUM_NUMA_NODES);
+    static ref NODE_SHIFT_BITS: usize = node_shift_bits();
     pub static ref MAXIMUM_SIZE: usize = maximum_size();
 }
 
@@ -389,7 +388,11 @@ fn log_2_of(num: usize) -> usize {
 #[inline]
 fn addr_numa_id(addr: usize) -> usize {
     debug_assert!(addr >= *HEAP_BASE, "{} v.s {}", addr, *HEAP_BASE);
-    (addr - *HEAP_BASE) >> *NODE_SHIFT_BITS
+    let offset = addr - *HEAP_BASE;
+    let shift_bits = *NODE_SHIFT_BITS;
+    let res = offset >> shift_bits;
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           debug_assert!(res < *NUM_NUMA_NODES - 1);
+    res
 }
 
 #[inline]
@@ -401,6 +404,12 @@ fn size_class_index_from_size(size: usize) -> usize {
     } else {
         log
     }
+}
+
+fn node_shift_bits() -> usize {
+    let total_heap_bits = log_2_of(*TOTAL_HEAP_SIZE);
+    let numa_nodes_bits = log_2_of(*NUM_NUMA_NODES);
+    total_heap_bits - numa_nodes_bits
 }
 
 fn maximum_size() -> usize {
