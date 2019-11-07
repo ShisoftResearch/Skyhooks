@@ -77,10 +77,10 @@ struct RemoteNodeFree {
 }
 
 pub fn allocate(size: usize) -> Ptr {
+    let size_class_index = size_class_index_from_size(size);
     THREAD_META.with(|meta| {
-        // allocate memory inside the thread meta
-        let size_class_index = size_class_index_from_size(size);
         let size_class = &meta.sizes[size_class_index];
+        // allocate memory inside the thread meta
         let addr = if let Some(freed) = size_class.free_list.pop() {
             // first, looking in the free list
             freed
@@ -108,22 +108,19 @@ pub fn allocate(size: usize) -> Ptr {
 }
 pub fn contains(ptr: Ptr) -> bool {
     let addr = ptr as usize;
+    if !address_in_range(addr) { return false; }
     let node_id = addr_numa_id(addr);
-    if node_id > *NUM_NUMA_NODES - 1 { return false; }
     let node = &PER_NODE_META[node_id];
     node.objects.refresh();
     node.objects.contains(addr)
 }
 pub fn free(ptr: Ptr) -> bool {
     let addr = ptr as usize;
-    if addr < *HEAP_BASE || addr > *HEAP_UPPER_BOUND {
-        return false;
-    }
+    if !address_in_range(addr) { return false; }
+    let node_id = addr_numa_id(addr);
+    let node = &PER_NODE_META[node_id];
     THREAD_META.with(|meta| {
         let current_node = meta.numa;
-        let node_id = addr_numa_id(addr);
-        if node_id > *NUM_NUMA_NODES - 1 { return false; }
-        let node = &PER_NODE_META[node_id];
         node.objects.refresh();
         if node_id != current_node {
             // append address to remote node if this address does not belong to current node
@@ -154,11 +151,16 @@ pub fn free(ptr: Ptr) -> bool {
 }
 pub fn size_of(ptr: Ptr) -> Option<usize> {
     let addr = ptr as usize;
+    if !address_in_range(addr) { return None }
     let node_id = addr_numa_id(addr);
-    if node_id > *NUM_NUMA_NODES - 1 { return None; }
     let node_meta = &PER_NODE_META[node_id];
     node_meta.objects.refresh();
     node_meta.objects.get(addr).map(|o| o.size)
+}
+
+#[inline(always)]
+pub fn address_in_range(addr: usize) -> bool {
+    addr >= *HEAP_BASE && addr < *HEAP_UPPER_BOUND
 }
 
 impl ThreadMeta {
@@ -290,17 +292,19 @@ impl RemoteNodeFree {
         let list = Arc::new(lflist::List::new());
         let list_clone = list.clone();
         let handle = thread::Builder::new()
-            .name(format!("Remote Free {}", node_id))
-            .spawn(move || loop {
-                if let Some(addr) = list_clone.pop() {
-                    debug_assert_eq!(
-                        addr_numa_id(addr),
-                        node_id,
-                        "Node freeing remote pending object"
-                    );
-                    free(addr as Ptr);
-                } else {
-                    thread::park();
+            .name(format!("remote-free-{}", node_id))
+            .spawn(move || {
+                loop {
+                    if let Some(addr) = list_clone.pop() {
+                        debug_assert_eq!(
+                            addr_numa_id(addr),
+                            node_id,
+                            "Node freeing remote pending object"
+                        );
+                        free(addr as Ptr);
+                    } else {
+                        thread::park();
+                    }
                 }
             })
             .unwrap();
@@ -427,6 +431,11 @@ fn node_shift_bits() -> usize {
 
 fn maximum_size() -> usize {
     size_classes()[NUM_SIZE_CLASS - 1].size
+}
+
+#[inline(always)]
+pub fn warm_up() {
+    let _ = *PER_NODE_META;
 }
 
 #[cfg(test)]
