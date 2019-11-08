@@ -103,6 +103,7 @@ impl<T> List<T> {
     }
 
     pub fn pop(&self) -> Option<T> {
+        if self.count.load(Relaxed) == 0 { return None; }
         let mut page;
         loop {
             let head_ptr = self.head.load(Relaxed);
@@ -150,9 +151,10 @@ impl<T> List<T> {
         }
     }
     pub fn drop_out_all(&self) -> Vec<T> {
+        let mut res = vec![];
+        if self.count.load(Relaxed) == 0 { return res; }
         let new_head_buffer = BufferMeta::new();
         let mut buffer_ptr = self.head.swap(new_head_buffer, Relaxed);
-        let mut res = vec![];
         'main: while buffer_ptr != null_buffer() {
             let buffer = BufferMeta::borrow(buffer_ptr);
             let next_ptr = buffer.next.load(Relaxed);
@@ -178,6 +180,7 @@ impl<T> List<T> {
     }
 
     pub fn prepend_with(&self, other: &Self) {
+        if other.count.load(Relaxed) == 0 { return; }
         let other_head = other.head.swap(BufferMeta::new(), Relaxed);
         let other_count = other.count.swap(0, Relaxed);
         let mut other_tail = BufferMeta::borrow(other_head);
