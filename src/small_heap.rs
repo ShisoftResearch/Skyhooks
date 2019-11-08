@@ -32,7 +32,7 @@ lazy_static! {
     static ref TOTAL_HEAP_SIZE: usize = total_heap();
     static ref HEAP_BASE: usize = mmap_without_fd(*TOTAL_HEAP_SIZE) as usize;
     static ref HEAP_UPPER_BOUND: usize = *HEAP_BASE + *TOTAL_HEAP_SIZE;
-    static ref PER_NODE_META: FixedVec<NodeMeta> = gen_numa_node_list();
+    static ref PER_NODE_META: Vec<NodeMeta> = gen_numa_node_list();
     static ref NODE_SHIFT_BITS: usize = node_shift_bits();
     pub static ref MAXIMUM_SIZE: usize = maximum_size();
 }
@@ -344,21 +344,21 @@ impl RemoteNodeFree {
     }
 }
 
-fn gen_numa_node_list() -> FixedVec<NodeMeta> {
+fn gen_numa_node_list() -> Vec<NodeMeta> {
     let num_nodes = *NUM_NUMA_NODES;
     let node_shift_bits = *NODE_SHIFT_BITS;
     let heap_base = *HEAP_BASE;
-    let mut nodes = FixedVec::new(num_nodes);
+    let mut nodes = Vec::with_capacity(num_nodes);
     for i in 0..num_nodes {
         let node_base = heap_base + (i << node_shift_bits);
         let remote_free = if num_nodes > 0 { Some(RemoteNodeFree::new(i)) } else { None };
-        nodes[i] = NodeMeta {
+        nodes.push(NodeMeta {
             alloc_pos: AtomicUsize::new(node_base),
             common: common_size_classes(),
             pending_free: remote_free,
             thread_free: ObjectMap::with_capacity(128),
             objects: evmap::EvMap::new(),
-        };
+        });
     }
     return nodes;
 }
@@ -399,7 +399,7 @@ fn thread_free_lists(size_classes: &TSizeClasses) -> TThreadFreeLists {
 
 #[inline]
 fn per_node_heap() -> usize {
-    min_power_of_2(64 * 1024 * 1024 * 1024)
+    min_power_of_2(16 * 1024 * 1024 * 1024)
 }
 
 #[inline(always)]
