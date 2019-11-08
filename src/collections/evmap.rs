@@ -60,24 +60,29 @@ impl<V: Clone> EvMap<V> {
         }
     }
 
+    #[inline(always)]
     pub fn insert(&self, key: usize, value: V) -> Option<()> {
         self.map.insert(key, value)
     }
 
+    #[inline(always)]
     pub fn get(&self, key: usize) -> Option<V> {
         self.map.get(key)
     }
 
+    #[inline(always)]
     pub fn remove(&self, key: usize) -> Option<V> {
         self.map.remove(key)
     }
 
+    #[inline(always)]
     pub fn contains(&self, key: usize) -> bool {
         self.map.contains(key)
     }
 }
 
 impl<V> Producer<V> {
+    #[inline]
     pub fn insert(&self, key: usize, value: V) {
         self.cache.exclusive_push((key, value));
     }

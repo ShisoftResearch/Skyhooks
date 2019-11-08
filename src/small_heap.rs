@@ -326,6 +326,7 @@ impl RemoteNodeFree {
         }
     }
 
+    #[inline(always)]
     pub fn push(&self, addr: usize) {
         self.pending_free.push(addr as usize);
         // self.sentinel_thread.unpark();
@@ -401,6 +402,7 @@ fn per_node_heap() -> usize {
     min_power_of_2(64 * 1024 * 1024 * 1024)
 }
 
+#[inline(always)]
 fn total_heap() -> usize {
     min_power_of_2(per_node_heap() * *NUM_NUMA_NODES)
 }
@@ -419,12 +421,12 @@ fn min_power_of_2(mut n: usize) -> usize {
     return 1 << count;
 }
 
-#[inline]
+#[inline(always)]
 fn log_2_of(num: usize) -> usize {
     mem::size_of::<usize>() * 8 - num.leading_zeros() as usize - 1
 }
 
-#[inline]
+#[inline(always)]
 fn addr_numa_id(addr: usize) -> usize {
     let offset = addr - *HEAP_BASE;
     let shift_bits = *NODE_SHIFT_BITS;
@@ -432,7 +434,7 @@ fn addr_numa_id(addr: usize) -> usize {
     res
 }
 
-#[inline]
+#[inline(always)]
 fn size_class_index_from_size(size: usize) -> usize {
     debug_assert!(size > 0);
     let log = log_2_of(size);
@@ -443,12 +445,14 @@ fn size_class_index_from_size(size: usize) -> usize {
     }
 }
 
+#[inline(always)]
 fn node_shift_bits() -> usize {
     let total_heap_bits = log_2_of(*TOTAL_HEAP_SIZE);
     let numa_nodes_bits = log_2_of(*NUM_NUMA_NODES);
     total_heap_bits - numa_nodes_bits
 }
 
+#[inline(always)]
 fn maximum_size() -> usize {
     size_classes()[NUM_SIZE_CLASS - 1].size
 }
