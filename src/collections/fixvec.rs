@@ -1,23 +1,24 @@
 // a boring fixed sized vector, for index only
 
-use crate::bump_heap::BumpAllocator;
 use core::alloc::Layout;
 use core::mem;
-use std::alloc::GlobalAlloc;
+use std::alloc::{GlobalAlloc, Alloc, Global};
 use std::ops::{Index, IndexMut};
 use crate::utils::alloc_mem;
+use std::marker::PhantomData;
 
-pub struct FixedVec<T> {
+pub struct FixedVec<T, A: Alloc + Default = Global> {
     ptr: *mut T,
+    shadow: PhantomData<A>
 }
 
-impl<T> FixedVec<T> {
+impl<T, A: Alloc + Default> FixedVec<T, A> {
     pub fn new(cap: usize) -> Self {
         let obj_size = mem::size_of::<T>();
-        let align = mem::align_of::<T>();
         let total_size = obj_size * cap;
         Self {
-            ptr: unsafe { alloc_mem::<usize>(total_size) } as *mut T,
+            ptr: unsafe { alloc_mem::<T, A>(total_size) } as *mut T,
+            shadow: PhantomData
         }
     }
 }

@@ -200,7 +200,7 @@ impl Drop for ThreadMeta {
     fn drop(&mut self) {
         let page_size = *SYS_PAGE_SIZE;
         api::INNER_CALL.with(|is_inner| {
-            is_inner.store(true, Relaxed);
+            is_inner.set(true);
             let numa_id = self.numa;
             let numa = &PER_NODE_META[numa_id];
             numa.objects.remove_producer(&self.objects);

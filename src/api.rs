@@ -4,12 +4,11 @@ use libc::*;
 use lfmap::{Map, WordMap};
 use crate::utils::align_padding;
 use crate::mmap_heap::*;
-use core::sync::atomic::AtomicBool;
-use core::sync::atomic::Ordering::Relaxed;
 use std::ptr::null_mut;
+use core::cell::Cell;
 
 thread_local! {
-    pub static INNER_CALL: AtomicBool = AtomicBool::new(false);
+    pub static INNER_CALL: Cell<bool> = Cell::new(false);
 }
 lazy_static! {
     static ref RUST_ADDR_MAPPING: lfmap::WordMap<MmapAllocator> = lfmap::WordMap::<MmapAllocator>::with_capacity(2048);
@@ -18,11 +17,11 @@ lazy_static! {
 pub unsafe fn nu_malloc(size: Size) -> Ptr {
     if size == 0 { return null_mut(); } // The C standard (C17 7.22.3/1)
     INNER_CALL.with(|is_inner| {
-        if !is_inner.load(Relaxed) {
-            is_inner.store(true, Relaxed);
+        if !is_inner.get() {
+            is_inner.set(true);
             crate::small_heap::warm_up();
             let res = generic_heap::malloc(size);
-            is_inner.store(false, Relaxed);
+            is_inner.set(false);
             res
         } else {
             bump_heap::malloc(size)
@@ -33,11 +32,11 @@ pub unsafe fn nu_malloc(size: Size) -> Ptr {
 pub unsafe fn nu_free(ptr: Ptr) {
     if ptr == null_mut() { return; }
     INNER_CALL.with(|is_inner| {
-        if !is_inner.load(Relaxed) {
-            is_inner.store(true, Relaxed);
+        if !is_inner.get() {
+            is_inner.set(true);
             crate::small_heap::warm_up();
             generic_heap::free(ptr);
-            is_inner.store(false, Relaxed);
+            is_inner.set(false);
         } else {
             bump_heap::free(ptr);
         }
@@ -55,10 +54,10 @@ pub unsafe fn nu_calloc(nmemb: Size, size: Size) -> Ptr {
 
 pub unsafe fn nu_realloc(ptr: Ptr, size: Size) -> Ptr {
     INNER_CALL.with(|is_inner| {
-        if !is_inner.load(Relaxed) {
-            is_inner.store(true, Relaxed);
+        if !is_inner.get() {
+            is_inner.set(true);
             let res = generic_heap::realloc(ptr, size);
-            is_inner.store(false, Relaxed);
+            is_inner.set(false);
             res
         } else {
             bump_heap::realloc(ptr, size)

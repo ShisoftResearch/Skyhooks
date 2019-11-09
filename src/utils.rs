@@ -113,18 +113,20 @@ pub fn is_power_of_2(x: usize) -> bool {
 }
 
 #[inline(always)]
-pub fn alloc_mem<T>(size: usize) -> usize {
+pub fn alloc_mem<T, A: Alloc + Default>(size: usize) -> usize {
+    let mut a = A::default();
     let align = mem::align_of::<T>();
     let layout = Layout::from_size_align(size, align).unwrap();
     // must be all zeroed
-    unsafe { Global.alloc_zeroed(layout) }.unwrap().as_ptr() as usize
+    unsafe { a.alloc_zeroed(layout) }.unwrap().as_ptr() as usize
 }
 
 #[inline(always)]
-pub fn dealloc_mem<T>(ptr: usize, size: usize) {
+pub fn dealloc_mem<T, A: Alloc + Default>(ptr: usize, size: usize) {
+    let mut a = A::default();
     let align = mem::align_of::<T>();
     let layout = Layout::from_size_align(size, align).unwrap();
-    unsafe { Global.dealloc(NonNull::<u8>::new(ptr as *mut u8).unwrap(), layout) }
+    unsafe { a.dealloc(NonNull::<u8>::new(ptr as *mut u8).unwrap(), layout) }
 }
 
 #[cfg(test)]
