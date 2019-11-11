@@ -148,7 +148,8 @@ unsafe impl GlobalAlloc for AllocatorInner {
             let size_class_index = size_class_index_from_size(actual_size);
             if size_class_index < self.sizes.len() {
                 self.sizes[size_class_index].free_list.push(actual_addr);
-            } else {
+            }
+            if actual_size > *SYS_PAGE_SIZE {
                 dealloc_regional(actual_addr as Ptr, actual_size);
             }
         }
