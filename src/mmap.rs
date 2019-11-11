@@ -1,7 +1,7 @@
 use super::*;
 use core::ptr;
-use libc::*;
 use errno::errno;
+use libc::*;
 
 const MADV_NOHUGEPAGE: c_int = 14;
 

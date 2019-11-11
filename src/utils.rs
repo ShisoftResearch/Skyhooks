@@ -1,8 +1,8 @@
 use crate::bump_heap::BumpAllocator;
-use core::alloc::{GlobalAlloc, Layout, Alloc};
-use core::ptr::NonNull;
 use alloc::alloc::Global;
+use core::alloc::{Alloc, GlobalAlloc, Layout};
 use core::mem;
+use core::ptr::NonNull;
 use libc::{sysconf, _SC_PAGESIZE};
 use regex::Regex;
 use std::collections::HashMap;

@@ -2,6 +2,7 @@ use super::*;
 use crate::collections::evmap;
 use crate::collections::fixvec::FixedVec;
 use crate::collections::lflist;
+use crate::generic_heap::{log_2_of, size_class_index_from_size, NUM_SIZE_CLASS};
 use crate::mmap::mmap_without_fd;
 use crate::utils::*;
 use core::mem;
@@ -10,12 +11,11 @@ use core::sync::atomic::AtomicUsize;
 use crossbeam_queue::SegQueue;
 use lfmap::{Map, ObjectMap};
 use std::cell::RefCell;
+use std::clone::Clone;
 use std::os::unix::thread::JoinHandleExt;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;
 use std::thread;
-use std::clone::Clone;
-use crate::generic_heap::{NUM_SIZE_CLASS, size_class_index_from_size, log_2_of};
 
 type SharedFreeList = Arc<lflist::List<usize>>;
 type TSizeClasses = [SizeClass; NUM_SIZE_CLASS];
@@ -76,7 +76,7 @@ struct RemoteNodeFree {
 #[derive(Clone)]
 struct Object {
     tid: usize,
-    tier: usize
+    tier: usize,
 }
 
 pub fn allocate(size: usize) -> Ptr {
@@ -103,23 +103,25 @@ pub fn allocate(size: usize) -> Ptr {
                     .allocate_from_common(size_class.size, size_class_index, &node)
             }
         };
-        node.objects.insert(
-            addr,
-            meta.object_map(addr, size_class_index),
-        );
+        node.objects
+            .insert(addr, meta.object_map(addr, size_class_index));
         return addr as Ptr;
     })
 }
 pub fn contains(ptr: Ptr) -> bool {
     let addr = ptr as usize;
-    if !address_in_range(addr) { return false; }
+    if !address_in_range(addr) {
+        return false;
+    }
     let node_id = addr_numa_id(addr);
     let node = &PER_NODE_META[node_id];
     node.objects.contains(addr)
 }
 pub fn free(ptr: Ptr) -> bool {
     let addr = ptr as usize;
-    if !address_in_range(addr) { return false; }
+    if !address_in_range(addr) {
+        return false;
+    }
     let node_id = addr_numa_id(addr);
     let node = &PER_NODE_META[node_id];
     THREAD_META.with(|meta| {
@@ -156,14 +158,15 @@ pub fn free(ptr: Ptr) -> bool {
 }
 pub fn size_of(ptr: Ptr) -> Option<usize> {
     let addr = ptr as usize;
-    if !address_in_range(addr) { return None }
+    if !address_in_range(addr) {
+        return None;
+    }
     let node_id = addr_numa_id(addr);
     let node_meta = &PER_NODE_META[node_id];
-    node_meta.objects.get(addr).map(|o| {
-        THREAD_META.with(|meta| {
-            meta.sizes[o.tier].size
-        })
-    })
+    node_meta
+        .objects
+        .get(addr)
+        .map(|o| THREAD_META.with(|meta| meta.sizes[o.tier].size))
 }
 
 #[inline(always)]
@@ -292,9 +295,7 @@ impl ReservedPage {
 impl RemoteNodeFree {
     pub fn new(node_id: usize) -> Self {
         let list = Arc::new(lflist::List::new());
-        Self {
-            pending_free: list
-        }
+        Self { pending_free: list }
     }
 
     #[inline(always)]
@@ -305,11 +306,11 @@ impl RemoteNodeFree {
 
     pub fn free_all(&self) {
         while let Some(addr) = self.pending_free.pop() {
-//            debug_assert_eq!(
-//                addr_numa_id(addr),
-//                current_numa(),
-//                "Node freeing remote pending object"
-//            );
+            //            debug_assert_eq!(
+            //                addr_numa_id(addr),
+            //                current_numa(),
+            //                "Node freeing remote pending object"
+            //            );
             free(addr as Ptr);
         }
     }
@@ -322,7 +323,11 @@ fn gen_numa_node_list() -> Vec<NodeMeta> {
     let mut nodes = Vec::with_capacity(num_nodes);
     for i in 0..num_nodes {
         let node_base = heap_base + (i << node_shift_bits);
-        let remote_free = if num_nodes > 0 { Some(RemoteNodeFree::new(i)) } else { None };
+        let remote_free = if num_nodes > 0 {
+            Some(RemoteNodeFree::new(i))
+        } else {
+            None
+        };
         nodes.push(NodeMeta {
             alloc_pos: AtomicUsize::new(node_base),
             common: common_size_classes(),

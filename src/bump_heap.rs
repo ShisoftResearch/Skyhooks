@@ -147,8 +147,6 @@ unsafe impl GlobalAlloc for AllocatorInner {
             let actual_size = obj.size;
             let size_class_index = size_class_index_from_size(actual_size);
             if size_class_index < self.sizes.len() {
-                // debug_assert!(actual_addr >= self.addr.load(Relaxed));
-                // debug_assert!(actual_addr < self.addr.load(Relaxed) + HEAP_VIRT_SIZE);
                 self.sizes[size_class_index].free_list.push(actual_addr);
             } else {
                 dealloc_regional(actual_addr as Ptr, actual_size);

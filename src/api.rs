@@ -1,21 +1,24 @@
-use crate::{generic_heap, Ptr, Size, NULL_PTR, bump_heap};
-use core::alloc::{GlobalAlloc, Layout};
-use libc::*;
-use lfmap::{Map, WordMap};
-use crate::utils::align_padding;
 use crate::mmap_heap::*;
-use std::ptr::null_mut;
+use crate::utils::align_padding;
+use crate::{bump_heap, generic_heap, Ptr, Size, NULL_PTR};
+use core::alloc::{GlobalAlloc, Layout};
 use core::cell::Cell;
+use lfmap::{Map, WordMap};
+use libc::*;
+use std::ptr::null_mut;
 
 thread_local! {
     pub static INNER_CALL: Cell<bool> = Cell::new(false);
 }
 lazy_static! {
-    static ref RUST_ADDR_MAPPING: lfmap::WordMap<MmapAllocator> = lfmap::WordMap::<MmapAllocator>::with_capacity(2048);
+    static ref RUST_ADDR_MAPPING: lfmap::WordMap<MmapAllocator> =
+        lfmap::WordMap::<MmapAllocator>::with_capacity(2048);
 }
 
 pub unsafe fn nu_malloc(size: Size) -> Ptr {
-    if size == 0 { return null_mut(); } // The C standard (C17 7.22.3/1)
+    if size == 0 {
+        return null_mut();
+    } // The C standard (C17 7.22.3/1)
     INNER_CALL.with(|is_inner| {
         if !is_inner.get() {
             is_inner.set(true);
@@ -27,10 +30,11 @@ pub unsafe fn nu_malloc(size: Size) -> Ptr {
             bump_heap::malloc(size)
         }
     })
-
 }
 pub unsafe fn nu_free(ptr: Ptr) {
-    if ptr == null_mut() { return; }
+    if ptr == null_mut() {
+        return;
+    }
     INNER_CALL.with(|is_inner| {
         if !is_inner.get() {
             is_inner.set(true);

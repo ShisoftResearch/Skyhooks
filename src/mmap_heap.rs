@@ -1,7 +1,7 @@
-use core::alloc::{Alloc, Layout, AllocErr};
-use core::ptr;
 use crate::mmap::{mmap_without_fd, munmap_memory};
 use crate::Ptr;
+use core::alloc::{Alloc, AllocErr, Layout};
+use core::ptr;
 
 // Heap allocator calls mmap and unmap and does NOT respect layout
 pub struct MmapAllocator;
@@ -19,5 +19,7 @@ unsafe impl Alloc for MmapAllocator {
 }
 
 impl Default for MmapAllocator {
-    fn default() -> Self { Self }
+    fn default() -> Self {
+        Self
+    }
 }

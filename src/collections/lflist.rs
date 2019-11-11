@@ -1,14 +1,14 @@
 // usize lock-free, wait free paged linked list stack
 
 use crate::utils::*;
+use core::alloc::Alloc;
 use core::mem;
 use core::ptr;
-use std::ops::Deref;
-use std::sync::atomic::Ordering::{Relaxed};
-use std::sync::atomic::{AtomicPtr, AtomicUsize};
-use core::alloc::Alloc;
-use std::ptr::null_mut;
 use std::alloc::Global;
+use std::ops::Deref;
+use std::ptr::null_mut;
+use std::sync::atomic::Ordering::Relaxed;
+use std::sync::atomic::{AtomicPtr, AtomicUsize};
 
 struct BufferMeta<T, A: Alloc + Default> {
     head: AtomicUsize,
@@ -106,7 +106,9 @@ impl<T, A: Alloc + Default> List<T, A> {
     }
 
     pub fn pop(&self) -> Option<T> {
-        if self.count.load(Relaxed) == 0 { return None; }
+        if self.count.load(Relaxed) == 0 {
+            return None;
+        }
         let mut page;
         loop {
             let head_ptr = self.head.load(Relaxed);
@@ -127,7 +129,10 @@ impl<T, A: Alloc + Default> List<T, A> {
                 let next = page.next.load(Relaxed);
                 // CAS page head to four times of the upper bound indicates this buffer is obsolete
                 if next != null_mut()
-                    && page.head.compare_and_swap(pos, page.upper_bound << 2, Relaxed) == pos
+                    && page
+                        .head
+                        .compare_and_swap(pos, page.upper_bound << 2, Relaxed)
+                        == pos
                 {
                     if self.head.compare_and_swap(head_ptr, next, Relaxed) == head_ptr {
                         BufferMeta::unref(head_ptr);
@@ -138,10 +143,9 @@ impl<T, A: Alloc + Default> List<T, A> {
                 continue;
             }
             let mut res = None;
-            if new_pos >= page.lower_bound{
+            if new_pos >= page.lower_bound {
                 res = Some(unsafe { ptr::read(new_pos as *mut T) });
-                if page.head.compare_and_swap(pos, new_pos, Relaxed) != pos
-                {
+                if page.head.compare_and_swap(pos, new_pos, Relaxed) != pos {
                     // cannot swap head
                     mem::forget(res.unwrap()); // won't call drop for this one
                     continue;
@@ -155,7 +159,9 @@ impl<T, A: Alloc + Default> List<T, A> {
     }
     pub fn drop_out_all(&self) -> Vec<T> {
         let mut res = vec![];
-        if self.count.load(Relaxed) == 0 { return res; }
+        if self.count.load(Relaxed) == 0 {
+            return res;
+        }
         let new_head_buffer = BufferMeta::new();
         let mut buffer_ptr = self.head.swap(new_head_buffer, Relaxed);
         'main: while buffer_ptr != null_mut() {
@@ -171,7 +177,7 @@ impl<T, A: Alloc + Default> List<T, A> {
                     buffer_ptr = next_ptr;
                     continue 'main;
                 } else {
-                    continue
+                    continue;
                 }
             }
             res.append(&mut BufferMeta::flush_buffer(&*buffer));
@@ -183,7 +189,9 @@ impl<T, A: Alloc + Default> List<T, A> {
     }
 
     pub fn prepend_with(&self, other: &Self) {
-        if other.count.load(Relaxed) == 0 { return; }
+        if other.count.load(Relaxed) == 0 {
+            return;
+        }
         let other_head = other.head.swap(BufferMeta::new(), Relaxed);
         let other_count = other.count.swap(0, Relaxed);
         let mut other_tail = BufferMeta::borrow(other_head);
@@ -266,7 +274,7 @@ impl<T, A: Alloc + Default> BufferMeta<T, A> {
         let mut addr = buffer.lower_bound;
         let data_bound = buffer.head.load(Relaxed);
         let mut res = vec![];
-        if data_bound <= buffer.upper_bound{
+        if data_bound <= buffer.upper_bound {
             // this buffer is not empty
             while addr < data_bound {
                 let ptr = addr as *mut T;
@@ -310,9 +318,9 @@ impl<T, A: Alloc + Default> Deref for BufferRef<T, A> {
 mod test {
     use crate::collections::lflist::List;
     use crate::utils::SYS_PAGE_SIZE;
+    use std::alloc::Global;
     use std::sync::Arc;
     use std::thread;
-    use std::alloc::Global;
 
     #[test]
     pub fn general() {
