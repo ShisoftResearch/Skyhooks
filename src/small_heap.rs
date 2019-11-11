@@ -169,7 +169,7 @@ pub fn size_of(ptr: Ptr) -> Option<usize> {
         .map(|o| THREAD_META.with(|meta| meta.sizes[o.tier].size))
 }
 
-#[inline(always)]
+#[inline]
 pub fn address_in_range(addr: usize) -> bool {
     addr >= *HEAP_BASE && addr < *HEAP_UPPER_BOUND
 }
@@ -298,7 +298,7 @@ impl RemoteNodeFree {
         Self { pending_free: list }
     }
 
-    #[inline(always)]
+    #[inline]
     pub fn push(&self, addr: usize) {
         self.pending_free.push(addr as usize);
         // self.sentinel_thread.unpark();
@@ -378,7 +378,7 @@ fn per_node_heap() -> usize {
     min_power_of_2(16 * 1024 * 1024 * 1024)
 }
 
-#[inline(always)]
+#[inline]
 fn total_heap() -> usize {
     min_power_of_2(per_node_heap() * *NUM_NUMA_NODES)
 }
@@ -397,7 +397,7 @@ fn min_power_of_2(mut n: usize) -> usize {
     return 1 << count;
 }
 
-#[inline(always)]
+#[inline]
 fn addr_numa_id(addr: usize) -> usize {
     let offset = addr - *HEAP_BASE;
     let shift_bits = *NODE_SHIFT_BITS;
@@ -405,19 +405,19 @@ fn addr_numa_id(addr: usize) -> usize {
     res
 }
 
-#[inline(always)]
+#[inline]
 fn node_shift_bits() -> usize {
     let total_heap_bits = log_2_of(*TOTAL_HEAP_SIZE);
     let numa_nodes_bits = log_2_of(*NUM_NUMA_NODES);
     total_heap_bits - numa_nodes_bits
 }
 
-#[inline(always)]
+#[inline]
 fn maximum_size() -> usize {
     size_classes()[NUM_SIZE_CLASS - 1].size
 }
 
-#[inline(always)]
+#[inline]
 pub fn warm_up() {
     // let _ = *PER_NODE_META;
 }

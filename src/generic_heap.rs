@@ -59,7 +59,7 @@ pub unsafe fn realloc(ptr: Ptr, size: Size) -> Ptr {
     new_ptr
 }
 
-#[inline(always)]
+#[inline]
 pub fn size_class_index_from_size(size: usize) -> usize {
     debug_assert!(size > 0);
     let log = log_2_of(size);
@@ -70,7 +70,7 @@ pub fn size_class_index_from_size(size: usize) -> usize {
     }
 }
 
-#[inline(always)]
+#[inline]
 pub fn log_2_of(num: usize) -> usize {
     mem::size_of::<usize>() * 8 - num.leading_zeros() as usize - 1
 }

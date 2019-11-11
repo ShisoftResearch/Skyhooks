@@ -112,7 +112,7 @@ pub fn is_power_of_2(x: usize) -> bool {
     (x & (x - 1)) == 0
 }
 
-#[inline(always)]
+#[inline]
 pub fn alloc_mem<T, A: Alloc + Default>(size: usize) -> usize {
     let mut a = A::default();
     let align = mem::align_of::<T>();
@@ -121,7 +121,7 @@ pub fn alloc_mem<T, A: Alloc + Default>(size: usize) -> usize {
     unsafe { a.alloc_zeroed(layout) }.unwrap().as_ptr() as usize
 }
 
-#[inline(always)]
+#[inline]
 pub fn dealloc_mem<T, A: Alloc + Default>(ptr: usize, size: usize) {
     let mut a = A::default();
     let align = mem::align_of::<T>();

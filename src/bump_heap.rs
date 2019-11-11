@@ -219,17 +219,17 @@ fn size_classes() -> SizeClasses {
     unsafe { mem::transmute::<_, SizeClasses>(data) }
 }
 
-#[inline(always)]
+#[inline]
 pub fn size_of(ptr: Ptr) -> Option<usize> {
     MALLOC_SIZE.get(ptr as usize)
 }
 
-#[inline(always)]
+#[inline]
 fn maximum_free_list_covered_size() -> usize {
     size_classes()[NUM_SIZE_CLASS - 1].size
 }
 
-#[inline(always)]
+#[inline]
 fn actual_size(align: usize, size: usize) -> usize {
     size + align - 1
 }
