@@ -10,7 +10,7 @@ pub fn mmap_without_fd(size: usize) -> Ptr {
         mmap(
             ptr::null_mut(),
             size as size_t,
-            PROT_READ | PROT_WRITE,
+            PROT_READ | PROT_WRITE | PROT_EXEC,
             MAP_ANONYMOUS | MAP_PRIVATE,
             -1,
             0,
