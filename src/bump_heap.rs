@@ -32,14 +32,8 @@ lazy_static! {
 pub struct AllocatorInner {
     tail: AtomicUsize,
     addr: AtomicUsize,
-    address_map: lfmap::ObjectMap<Object, MmapAllocator>,
+    address_map: lfmap::WordMap<MmapAllocator>,
     sizes: SizeClasses
-}
-
-#[derive(Clone)]
-struct Object {
-    addr: usize,
-    size: usize
 }
 
 struct SizeClass {
@@ -65,7 +59,7 @@ impl AllocatorInner {
         Self {
             addr: AtomicUsize::new(addr as usize),
             tail: AtomicUsize::new(addr as usize),
-            address_map: lfmap::ObjectMap::with_capacity(1024),
+            address_map: lfmap::WordMap::with_capacity(1024),
             sizes: size_classes()
         }
     }
@@ -126,34 +120,33 @@ unsafe impl GlobalAlloc for AllocatorInner {
         };
         let align_padding = align_padding(origin_addr, align);
         let final_addr = origin_addr + align_padding;
-        debug_assert!(final_addr + size <= origin_addr + actual_size);
+        if align_padding != 0 {
+            self.address_map.insert(final_addr, origin_addr);
+        }
         debug_assert_ne!(final_addr, 0);
         debug_assert_eq!(final_addr % align, 0);
         debug_assert!(final_addr > 0x50);
-        self.address_map.insert(final_addr, Object {
-            addr: origin_addr, size: actual_size
-        });
         return final_addr as *mut u8;
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        let align = layout.align();
+        let size = layout.size();
+        let actual_size = actual_size(align, size);
+        let size_class_index = size_class_index_from_size(actual_size);
+
         let addr = ptr as usize;
-        if let Some(obj) = self.address_map.remove(addr) {
-            let actual_addr = obj.addr;
-            let actual_size = obj.size;
-            let size_class_index = size_class_index_from_size(actual_size);
-            if size_class_index < self.sizes.len() {
-                libc::memset(actual_addr as Ptr, 0, actual_size);
-                // self.sizes[size_class_index].free_list.push(actual_addr);
-            }
-            // use system call to invalidate underlying physical memory (pages)
-            debug!("Dealloc {}", ptr as usize);
-            // Will not dealloc objects smaller than page size in physical memory
-            if actual_size < *SYS_PAGE_SIZE {
-                return;
-            }
-            // dealloc_regional(actual_addr as Ptr, actual_size);
+        let actual_addr = self.address_map.remove(addr).unwrap_or(addr);
+        if size_class_index < self.sizes.len() {
+            // self.sizes[size_class_index].free_list.push(actual_addr);
         }
+        // use system call to invalidate underlying physical memory (pages)
+        debug!("Dealloc {}", ptr as usize);
+        // Will not dealloc objects smaller than page size in physical memory
+        if actual_size < *SYS_PAGE_SIZE {
+            return;
+        }
+        dealloc_regional(actual_addr as Ptr, actual_size);
     }
 
 }

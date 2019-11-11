@@ -75,6 +75,5 @@ pub fn size_class_index_from_size(size: usize) -> usize {
 
 #[inline(always)]
 pub fn log_2_of(num: usize) -> usize {
-    if num == 0 { return 0 };
     mem::size_of::<usize>() * 8 - num.leading_zeros() as usize - 1
 }
