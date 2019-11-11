@@ -143,7 +143,7 @@ unsafe impl GlobalAlloc for AllocatorInner {
             let actual_size = obj.size;
             let size_class_index = size_class_index_from_size(actual_size);
             if size_class_index < self.sizes.len() {
-                libc::memset(actual_addr as Ptr, 0, actual_size);
+                // libc::memset(actual_addr as Ptr, 0, actual_size);
                 // self.sizes[size_class_index].free_list.push(actual_addr);
             }
             // use system call to invalidate underlying physical memory (pages)
