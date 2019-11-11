@@ -2,7 +2,6 @@ use super::*;
 use crate::collections::evmap;
 use crate::collections::fixvec::FixedVec;
 use crate::collections::lflist;
-use crate::generic_heap::ObjectMeta;
 use crate::mmap::mmap_without_fd;
 use crate::utils::*;
 use core::mem;
@@ -39,7 +38,7 @@ lazy_static! {
 
 struct ThreadMeta {
     sizes: TSizeClasses,
-    objects: Arc<evmap::Producer<ObjectMeta>>,
+    objects: Arc<evmap::Producer<Object>>,
     numa: usize,
     tid: usize,
 }
@@ -49,7 +48,7 @@ struct NodeMeta {
     common: TCommonSizeClasses,
     pending_free: Option<RemoteNodeFree>,
     thread_free: lfmap::ObjectMap<TThreadFreeLists>,
-    objects: evmap::EvMap<ObjectMeta>,
+    objects: evmap::EvMap<Object>,
 }
 
 struct SizeClass {
@@ -74,6 +73,12 @@ struct ReservedPage {
 struct RemoteNodeFree {
     pending_free: Arc<lflist::List<usize>>,
     // sentinel_thread: thread::Thread,
+}
+
+#[derive(Clone)]
+struct Object {
+    tid: usize,
+    tier: usize
 }
 
 pub fn allocate(size: usize) -> Ptr {
@@ -102,7 +107,7 @@ pub fn allocate(size: usize) -> Ptr {
         };
         meta.objects.insert(
             addr,
-            meta.object_map(addr, size_class_index, size_class.size),
+            meta.object_map(addr, size_class_index),
         );
         return addr as Ptr;
     })
@@ -159,7 +164,11 @@ pub fn size_of(ptr: Ptr) -> Option<usize> {
     let node_id = addr_numa_id(addr);
     let node_meta = &PER_NODE_META[node_id];
     node_meta.objects.refresh();
-    node_meta.objects.get(addr).map(|o| o.size)
+    node_meta.objects.get(addr).map(|o| {
+        THREAD_META.with(|meta| {
+            meta.sizes[o.tier].size
+        })
+    })
 }
 
 #[inline(always)]
@@ -184,11 +193,8 @@ impl ThreadMeta {
         }
     }
 
-    pub fn object_map(&self, ptr: usize, tier: usize, size: usize) -> ObjectMeta {
-        ObjectMeta {
-            size,
-            addr: ptr,
-            numa: self.numa,
+    pub fn object_map(&self, ptr: usize, tier: usize) -> Object {
+        Object {
             tier,
             tid: self.tid,
         }

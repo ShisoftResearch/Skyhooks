@@ -5,9 +5,6 @@ use std::ptr::null_mut;
 #[derive(Copy, Clone)]
 pub struct ObjectMeta {
     pub size: usize,
-    pub addr: usize,
-    pub numa: usize,
-    pub tier: usize,
     pub tid: usize,
 }
 
