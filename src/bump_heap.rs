@@ -130,10 +130,6 @@ unsafe impl GlobalAlloc for AllocatorInner {
             });
         let align_padding = align_padding(origin_addr, align);
         let final_addr = origin_addr + align_padding;
-        debug_assert!(final_addr + size <= origin_addr + actual_size);
-        debug_assert_ne!(final_addr, 0);
-        debug_assert_eq!(final_addr % align, 0);
-        debug_assert!(final_addr > 0x50);
         self.address_map.insert(
             final_addr,
             Object {
@@ -151,7 +147,8 @@ unsafe impl GlobalAlloc for AllocatorInner {
             let actual_size = obj.size;
             let size_class_index = size_class_index_from_size(actual_size);
             if size_class_index < self.sizes.len() {
-                libc::memset(actual_addr as Ptr, 0, actual_size);
+                // debug_assert!(actual_addr >= self.addr.load(Relaxed));
+                // debug_assert!(actual_addr < self.addr.load(Relaxed) + HEAP_VIRT_SIZE);
                 self.sizes[size_class_index].free_list.push(actual_addr);
             } else {
                 dealloc_regional(actual_addr as Ptr, actual_size);
