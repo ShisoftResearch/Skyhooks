@@ -19,6 +19,7 @@ pub unsafe fn nu_malloc(size: Size) -> Ptr {
     INNER_CALL.with(|is_inner| {
         if !is_inner.get() {
             is_inner.set(true);
+            crate::small_heap::warm_up();
             let res = generic_heap::malloc(size);
             is_inner.set(false);
             res
@@ -33,6 +34,7 @@ pub unsafe fn nu_free(ptr: Ptr) {
     INNER_CALL.with(|is_inner| {
         if !is_inner.get() {
             is_inner.set(true);
+            crate::small_heap::warm_up();
             generic_heap::free(ptr);
             is_inner.set(false);
         } else {
@@ -74,16 +76,13 @@ unsafe impl GlobalAlloc for NullocAllocator {
         let base_addr = nu_malloc(actual_size) as usize;
         let align_padding = align_padding(base_addr, align);
         let rust_addr = base_addr + align_padding;
-        if align_padding != 0 { RUST_ADDR_MAPPING.insert(rust_addr, base_addr); }
+        RUST_ADDR_MAPPING.insert(rust_addr, base_addr);
         rust_addr as *mut u8
     }
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+    unsafe fn dealloc(&self, ptr: *mut u8, _layout: Layout) {
         let addr = ptr as usize;
-        let base_addr = if layout.align() == 1 {
-            addr
-        } else {
-          if let Some(real_base) = RUST_ADDR_MAPPING.remove(addr) { real_base }  else { addr }
-        };
-        nu_free(base_addr as Ptr)
+        if let Some(base_addr) = RUST_ADDR_MAPPING.remove(addr) {
+            nu_free(base_addr as Ptr)
+        }
     }
 }

@@ -16,28 +16,8 @@ unsafe impl Alloc for MmapAllocator {
     unsafe fn dealloc(&mut self, ptr: ptr::NonNull<u8>, layout: Layout) {
         munmap_memory(ptr.as_ptr() as Ptr, layout.size())
     }
-
-
 }
 
 impl Default for MmapAllocator {
     fn default() -> Self { Self }
-}
-
-#[cfg(test)]
-mod test {
-    use crate::bump_heap::BumpAllocator;
-    use lfmap::Map;
-    use crate::mmap_heap::MmapAllocator;
-
-    #[test]
-    pub fn general() {
-        let map = lfmap::WordMap::<MmapAllocator>::with_capacity(1024);
-        for i in 5..10240 {
-            map.insert(i, i * 2);
-        }
-        for i in 5..10240 {
-            assert_eq!(map.get(i), Some(i * 2), "index: {}", i);
-        }
-    }
 }

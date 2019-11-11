@@ -1,10 +1,6 @@
 use super::*;
 use libc::*;
 use std::ptr::null_mut;
-use crate::utils::is_power_of_2;
-use core::mem;
-
-pub const NUM_SIZE_CLASS: usize = 16;
 
 #[derive(Copy, Clone)]
 pub struct ObjectMeta {
@@ -60,20 +56,4 @@ pub unsafe fn realloc(ptr: Ptr, size: Size) -> Ptr {
     memcpy(new_ptr, ptr, old_size);
     free(ptr);
     new_ptr
-}
-
-#[inline(always)]
-pub fn size_class_index_from_size(size: usize) -> usize {
-    debug_assert!(size > 0);
-    let log = log_2_of(size);
-    if is_power_of_2(size) && log > 0 {
-        log - 1
-    } else {
-        log
-    }
-}
-
-#[inline(always)]
-pub fn log_2_of(num: usize) -> usize {
-    mem::size_of::<usize>() * 8 - num.leading_zeros() as usize - 1
 }

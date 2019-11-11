@@ -40,8 +40,10 @@ impl<T, A: Alloc + Default> List<T, A> {
             page = BufferMeta::borrow(head_ptr);
             pos = page.head.load(Relaxed);
             let next_pos = pos + mem::size_of::<T>();
-            // detect obsolete buffer, try again
-            // if pos > page.upper_bound { continue; }
+            if pos > page.upper_bound {
+                // detect obsolete buffer, try again
+                continue;
+            }
             if next_pos > page.upper_bound {
                 // buffer overflow, make new and link to last buffer
                 let new_head = BufferMeta::new();
@@ -112,8 +114,10 @@ impl<T, A: Alloc + Default> List<T, A> {
             let pos = page.head.load(Relaxed);
             let obj_size = mem::size_of::<T>();
             let new_pos = pos - obj_size;
-            // detect obsolete buffer, try again
-            // if pos > page.upper_bound << 1 { continue; }
+            if pos > page.upper_bound << 1 {
+                // detect obsolete buffer, try again
+                continue;
+            }
             if pos == page.lower_bound && page.next.load(Relaxed) == null_mut() {
                 // empty buffer chain
                 return None;
@@ -123,7 +127,7 @@ impl<T, A: Alloc + Default> List<T, A> {
                 let next = page.next.load(Relaxed);
                 // CAS page head to four times of the upper bound indicates this buffer is obsolete
                 if next != null_mut()
-                    // && page.head.compare_and_swap(pos, page.upper_bound << 2, Relaxed) == pos
+                    && page.head.compare_and_swap(pos, page.upper_bound << 2, Relaxed) == pos
                 {
                     if self.head.compare_and_swap(head_ptr, next, Relaxed) == head_ptr {
                         BufferMeta::unref(head_ptr);
