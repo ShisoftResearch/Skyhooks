@@ -33,14 +33,8 @@ lazy_static! {
 pub struct AllocatorInner {
     tail: AtomicUsize,
     addr: AtomicUsize,
-    address_map: lfmap::ObjectMap<Object, MmapAllocator>,
+    address_map: lfmap::WorMap<MmapAllocator>,
     sizes: SizeClasses,
-}
-
-#[derive(Clone)]
-struct Object {
-    addr: usize,
-    size: usize,
 }
 
 struct SizeClass {
@@ -70,6 +64,44 @@ impl AllocatorInner {
             sizes: size_classes(),
         }
     }
+
+    fn bump_allocate(&self, size: usize) -> usize {
+        loop {
+            let addr = self.addr.load(Relaxed);
+            let current_tail = self.tail.load(Relaxed);
+            let new_tail = current_tail + size;
+            if new_tail > addr + HEAP_VIRT_SIZE {
+                // may overflow the address space, need to allocate another address space
+                // Fetch the old base address for reference in CAS
+                let new_base = allocate_address_space();
+                if self
+                    .addr
+                    .compare_and_swap(addr, new_base as usize, Ordering::Relaxed)
+                    != addr
+                {
+                    // CAS base address failed, give up and release allocated address space
+                    // Other thread is also trying to allocate address space and succeeded
+                    dealloc_address_space(new_base);
+                } else {
+                    // update tail by store. This will fail all ongoing allocation and retry
+                    self.tail.store(new_base as usize, Ordering::SeqCst);
+                }
+                // Anyhow, skip follow statements and retry
+                continue;
+            }
+            if self
+                .tail
+                .compare_and_swap(current_tail, new_tail, Ordering::SeqCst)
+                == current_tail
+            {
+                debug_assert!(current_tail > 0);
+                debug_assert!(current_tail >= addr);
+                debug_assert!(current_tail < addr + HEAP_VIRT_SIZE);
+                return current_tail;
+            }
+            // CAS tail failed, retry
+        }
+    }
 }
 
 unsafe impl GlobalAlloc for AllocatorInner {
@@ -90,66 +122,20 @@ unsafe impl GlobalAlloc for AllocatorInner {
             .sizes
             .get(size_class_index)
             .and_then(|sc| sc.free_list.pop())
-            .unwrap_or_else(|| {
-                let mut current_tail = 0;
-                loop {
-                    let addr = self.addr.load(Relaxed);
-                    current_tail = self.tail.load(Relaxed);
-                    let new_tail = current_tail + actual_size;
-                    if new_tail > addr + HEAP_VIRT_SIZE {
-                        // may overflow the address space, need to allocate another address space
-                        // Fetch the old base address for reference in CAS
-                        let new_base = allocate_address_space();
-                        if self
-                            .addr
-                            .compare_and_swap(addr, new_base as usize, Ordering::Relaxed)
-                            != addr
-                        {
-                            // CAS base address failed, give up and release allocated address space
-                            // Other thread is also trying to allocate address space and succeeded
-                            dealloc_address_space(new_base);
-                        } else {
-                            // update tail by store. This will fail all ongoing allocation and retry
-                            self.tail.store(new_base as usize, Ordering::Relaxed);
-                        }
-                        // Anyhow, skip follow statements and retry
-                        continue;
-                    }
-                    if self
-                        .tail
-                        .compare_and_swap(current_tail, new_tail, Ordering::Relaxed)
-                        == current_tail
-                    {
-                        debug_assert!(current_tail > 0);
-                        debug_assert!(current_tail >= addr);
-                        break;
-                    }
-                    // CAS tail failed, retry
-                }
-                debug_assert_ne!(current_tail, 0);
-                current_tail
-            });
+            .unwrap_or_else(|| self.bump_allocate(actual_size));
         let align_padding = align_padding(origin_addr, align);
         let final_addr = origin_addr + align_padding;
-        self.address_map.insert(
-            final_addr,
-            Object {
-                addr: origin_addr,
-                size: actual_size,
-            },
-        );
+        self.address_map.insert(final_addr, origin_addr);
         return final_addr as *mut u8;
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         let addr = ptr as usize;
-        if let Some(obj) = self.address_map.remove(addr) {
-            let actual_addr = obj.addr;
-            let actual_size = obj.size;
+        if let Some(actual_addr) = self.address_map.remove(addr) {
             let size_class_index = size_class_index_from_size(actual_size);
             if size_class_index < self.sizes.len() {
                 libc::memset(actual_addr as Ptr, 0, actual_size);
-                self.sizes[size_class_index].free_list.push(actual_addr);
+                // self.sizes[size_class_index].free_list.push(actual_addr);
             }
             if actual_size > *SYS_PAGE_SIZE {
                 dealloc_regional(actual_addr as Ptr, actual_size);
