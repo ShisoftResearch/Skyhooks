@@ -136,7 +136,7 @@ mod test {
     #[test]
     fn numa_nodes() {
         for (cpu, node) in SYS_CPU_NODE.iter() {
-            // println!("{} in {}", cpu, node);
+            println!("{} in {}", cpu, node);
         }
     }
 
