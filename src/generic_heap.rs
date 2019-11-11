@@ -6,12 +6,9 @@ use core::mem;
 
 pub const NUM_SIZE_CLASS: usize = 16;
 
-#[derive(Copy, Clone)]
+#[derive(Clone)]
 pub struct ObjectMeta {
     pub size: usize,
-    pub addr: usize,
-    pub numa: usize,
-    pub tier: usize,
     pub tid: usize,
 }
 
