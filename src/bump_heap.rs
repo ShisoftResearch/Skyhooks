@@ -31,9 +31,7 @@ lazy_static! {
 
 pub struct AllocatorInner {
     tail: AtomicUsize,
-    addr: AtomicUsize,
-    address_map: lfmap::WordMap<MmapAllocator>,
-    sizes: SizeClasses
+    addr: AtomicUsize
 }
 
 struct SizeClass {
@@ -58,9 +56,7 @@ impl AllocatorInner {
         let addr = allocate_address_space();
         Self {
             addr: AtomicUsize::new(addr as usize),
-            tail: AtomicUsize::new(addr as usize),
-            address_map: lfmap::WordMap::with_capacity(1024),
-            sizes: size_classes()
+            tail: AtomicUsize::new(addr as usize)
         }
     }
 }
@@ -71,15 +67,8 @@ unsafe impl GlobalAlloc for AllocatorInner {
         let size = layout.size();
         let actual_size = actual_size(align, size);
         let size_class_index = size_class_index_from_size(actual_size);
-        let origin_addr = if let Some(addr) = {
-            if size_class_index < self.sizes.len() {
-                self.sizes[size_class_index].free_list.pop()
-            } else {
-                None
-            }
-        } {
-            addr
-        } else {
+        let origin_addr =
+        {
             let mut current_tail = 0;
             loop {
                 let addr = self.addr.load(Relaxed);
@@ -120,9 +109,6 @@ unsafe impl GlobalAlloc for AllocatorInner {
         };
         let align_padding = align_padding(origin_addr, align);
         let final_addr = origin_addr + align_padding;
-        if align_padding != 0 {
-            self.address_map.insert(final_addr, origin_addr);
-        }
         debug_assert_ne!(final_addr, 0);
         debug_assert_eq!(final_addr % align, 0);
         debug_assert!(final_addr > 0x50);
@@ -136,10 +122,8 @@ unsafe impl GlobalAlloc for AllocatorInner {
         let size_class_index = size_class_index_from_size(actual_size);
 
         let addr = ptr as usize;
-        let actual_addr = self.address_map.remove(addr).unwrap_or(addr);
-        if size_class_index < self.sizes.len() {
-            // self.sizes[size_class_index].free_list.push(actual_addr);
-        }
+        let actual_addr = addr;
+
         // use system call to invalidate underlying physical memory (pages)
         debug!("Dealloc {}", ptr as usize);
         // Will not dealloc objects smaller than page size in physical memory
