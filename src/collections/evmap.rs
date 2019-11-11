@@ -4,19 +4,22 @@ use lfmap::{Map, ObjectMap};
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;
+use std::alloc::{Alloc, Global};
+use std::marker::PhantomData;
 
-pub struct Producer<V> {
+pub struct Producer<V, A: Alloc + Default> {
     id: usize,
     cache: lflist::List<(usize, V)>,
+    shadow: PhantomData<A>
 }
 
-pub struct EvMap<V: Clone> {
-    map: lfmap::ObjectMap<V>,
-    producers: lfmap::ObjectMap<Arc<Producer<V>>>,
+pub struct EvMap<V: Clone, A: Alloc + Default = Global> {
+    map: lfmap::ObjectMap<V, A>,
+    producers: lfmap::ObjectMap<Arc<Producer<V, A>>>,
     counter: AtomicUsize,
 }
 
-impl<V: Clone> EvMap<V> {
+impl<V: Clone, A: Alloc + Default> EvMap<V, A> {
     pub fn new() -> Self {
         Self {
             map: ObjectMap::with_capacity(512),
@@ -25,18 +28,19 @@ impl<V: Clone> EvMap<V> {
         }
     }
 
-    pub fn new_producer(&self) -> Arc<Producer<V>> {
+    pub fn new_producer(&self) -> Arc<Producer<V, A>> {
         let id = self.counter.fetch_add(1, Relaxed);
         let producer = Producer {
             id,
             cache: lflist::List::new(),
+            shadow: PhantomData
         };
         let reference = Arc::new(producer);
         self.producers.insert(id, reference.clone());
         return reference;
     }
 
-    pub fn remove_producer(&self, producer: &Arc<Producer<V>>) {
+    pub fn remove_producer(&self, producer: &Arc<Producer<V, A>>) {
         if let Some(p) = self.producers.remove(producer.id) {
             let items = p.cache.drop_out_all();
             for (k, v) in items {
@@ -81,7 +85,7 @@ impl<V: Clone> EvMap<V> {
     }
 }
 
-impl<V> Producer<V> {
+impl<V, A: Alloc + Default> Producer<V, A> {
     #[inline]
     pub fn insert(&self, key: usize, value: V) {
         self.cache.exclusive_push((key, value));

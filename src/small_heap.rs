@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::thread;
 use std::clone::Clone;
 
-type SharedFreeList = Arc<lflist::List<usize>>;
+type SharedFreeList = Arc<lflist::List<usize, BumpAllocator>>;
 type TSizeClasses = [SizeClass; NUM_SIZE_CLASS];
 type TCommonSizeClasses = [CommonSizeClass; NUM_SIZE_CLASS];
 type TThreadFreeLists = [SharedFreeList; NUM_SIZE_CLASS];
@@ -37,7 +37,7 @@ lazy_static! {
 
 struct ThreadMeta {
     sizes: TSizeClasses,
-    objects: Arc<evmap::Producer<Object>>,
+    objects: Arc<evmap::Producer<Object, BumpAllocator>>,
     numa: usize,
     tid: usize,
 }
@@ -46,21 +46,21 @@ struct NodeMeta {
     alloc_pos: AtomicUsize,
     common: TCommonSizeClasses,
     pending_free: Option<RemoteNodeFree>,
-    thread_free: lfmap::ObjectMap<TThreadFreeLists>,
-    objects: evmap::EvMap<Object>,
+    thread_free: lfmap::ObjectMap<TThreadFreeLists, BumpAllocator>,
+    objects: evmap::EvMap<Object, BumpAllocator>,
 }
 
 struct SizeClass {
     size: usize,
     // reserved page for every size class to ensure utilization
     reserved: ReservedPage,
-    free_list: Arc<lflist::List<usize>>,
+    free_list: Arc<lflist::List<usize, BumpAllocator>>,
 }
 
 struct CommonSizeClass {
     // unused up reserves from dead threads
     reserved: SegQueue<ReservedPage>,
-    free_list: lflist::List<usize>,
+    free_list: lflist::List<usize, BumpAllocator>,
 }
 
 #[derive(Clone)]
@@ -70,7 +70,7 @@ struct ReservedPage {
 }
 
 struct RemoteNodeFree {
-    pending_free: Arc<lflist::List<usize>>,
+    pending_free: Arc<lflist::List<usize, BumpAllocator>>,
     // sentinel_thread: thread::Thread,
 }
 
