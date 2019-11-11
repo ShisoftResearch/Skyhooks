@@ -33,7 +33,7 @@ lazy_static! {
 pub struct AllocatorInner {
     tail: AtomicUsize,
     addr: AtomicUsize,
-    address_map: lfmap::WorMap<MmapAllocator>,
+    address_map: lfmap::WordMap<MmapAllocator>,
     sizes: SizeClasses,
 }
 
@@ -45,13 +45,13 @@ struct SizeClass {
 pub const HEAP_VIRT_SIZE: usize = 2 * 1024 * 1024 * 1024; // 2GB
 
 fn allocate_address_space() -> Ptr {
-    mmap_without_fd(HEAP_VIRT_SIZE + 4096)
+    mmap_without_fd(HEAP_VIRT_SIZE)
 }
 
 // dealloc address space only been used when CAS base failed
 // Even noop will be fine, we still want to return the space the the OS because we can
 fn dealloc_address_space(address: Ptr) {
-    munmap_memory(address, HEAP_VIRT_SIZE + 4096);
+    munmap_memory(address, HEAP_VIRT_SIZE);
 }
 
 impl AllocatorInner {
@@ -60,7 +60,7 @@ impl AllocatorInner {
         Self {
             addr: AtomicUsize::new(addr as usize),
             tail: AtomicUsize::new(addr as usize),
-            address_map: lfmap::ObjectMap::with_capacity(1024),
+            address_map: lfmap::WordMap::with_capacity(1024),
             sizes: size_classes(),
         }
     }
@@ -102,13 +102,11 @@ impl AllocatorInner {
             // CAS tail failed, retry
         }
     }
-}
 
-unsafe impl GlobalAlloc for AllocatorInner {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+    fn size_of_object(&self, layout: &Layout) -> (usize, usize) {
         let align = layout.align();
         let size = layout.size();
-        let mut actual_size = actual_size(align, size);
+        let mut actual_size = actual_size_of(align, size);
         let size_class_index = size_class_index_from_size(actual_size);
         if size_class_index < self.sizes.len() {
             let size_class_size = self.sizes[size_class_index].size;
@@ -118,6 +116,14 @@ unsafe impl GlobalAlloc for AllocatorInner {
             actual_size = actual_size + align_padding(actual_size, *SYS_PAGE_SIZE);
             debug!("allocate large {}", actual_size);
         }
+        (actual_size, size_class_index)
+    }
+}
+
+unsafe impl GlobalAlloc for AllocatorInner {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        let align = layout.align();
+        let (actual_size, size_class_index) = self.size_of_object(&layout);
         let origin_addr = self
             .sizes
             .get(size_class_index)
@@ -130,12 +136,13 @@ unsafe impl GlobalAlloc for AllocatorInner {
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        let (actual_size, size_class_index) = self.size_of_object(&layout);
         let addr = ptr as usize;
         if let Some(actual_addr) = self.address_map.remove(addr) {
             let size_class_index = size_class_index_from_size(actual_size);
             if size_class_index < self.sizes.len() {
                 libc::memset(actual_addr as Ptr, 0, actual_size);
-                // self.sizes[size_class_index].free_list.push(actual_addr);
+                self.sizes[size_class_index].free_list.push(actual_addr);
             }
             if actual_size > *SYS_PAGE_SIZE {
                 dealloc_regional(actual_addr as Ptr, actual_size);
@@ -219,7 +226,7 @@ fn maximum_free_list_covered_size() -> usize {
 }
 
 #[inline]
-fn actual_size(align: usize, size: usize) -> usize {
+fn actual_size_of(align: usize, size: usize) -> usize {
     size + align - 1
 }
 
