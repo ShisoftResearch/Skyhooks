@@ -103,7 +103,7 @@ unsafe impl GlobalAlloc for AllocatorInner {
         // use system call to invalidate underlying physical memory (pages)
         debug!("Dealloc {}", ptr as usize);
         // Will not dealloc objects smaller than half page size
-        if layout.size() < (*SYS_PAGE_SIZE) {
+        if layout.size() < (*SYS_PAGE_SIZE / 2) {
             return;
         }
         let ptr_pos = ptr as usize;
