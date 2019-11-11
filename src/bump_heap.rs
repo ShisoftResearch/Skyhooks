@@ -75,10 +75,11 @@ unsafe impl GlobalAlloc for AllocatorInner {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let align = layout.align();
         let size = layout.size();
-        let actual_size = actual_size(align, size);
+        let mut actual_size = actual_size(align, size);
         let size_class_index = size_class_index_from_size(actual_size);
         let origin_addr = if let Some(addr) = {
             if size_class_index < self.sizes.len() {
+                actual_size = self.sizes[size_class_index].size;
                 self.sizes[size_class_index].free_list.pop()
             } else {
                 None
@@ -144,15 +145,10 @@ unsafe impl GlobalAlloc for AllocatorInner {
             let size_class_index = size_class_index_from_size(actual_size);
             if size_class_index < self.sizes.len() {
                 // libc::memset(actual_addr as Ptr, 0, actual_size);
-                // self.sizes[size_class_index].free_list.push(actual_addr);
+                self.sizes[size_class_index].free_list.push(actual_addr);
+            } else {
+                dealloc_regional(actual_addr as Ptr, actual_size);
             }
-            // use system call to invalidate underlying physical memory (pages)
-            debug!("Dealloc {}", ptr as usize);
-            // Will not dealloc objects smaller than page size in physical memory
-            if actual_size < *SYS_PAGE_SIZE {
-                return;
-            }
-            // dealloc_regional(actual_addr as Ptr, actual_size);
         }
     }
 
@@ -263,9 +259,48 @@ pub unsafe fn realloc(ptr: Ptr, size: Size) -> Ptr {
 mod test {
     use crate::bump_heap::BumpAllocator;
     use lfmap::Map;
+    use std::alloc::{GlobalAlloc, Layout};
+    use crate::Ptr;
 
     #[test]
-    pub fn general() {
+    pub fn generic() {
+        unsafe {
+            let a = BumpAllocator;
+            let o1_size = 128;
+            let o1_layout = Layout::from_size_align(o1_size, 8).unwrap();
+            let addr_1 = a.alloc(o1_layout);
+            libc::memset(addr_1 as Ptr, 255, o1_size);
+            for add in addr_1 as usize..addr_1 as usize + o1_size {
+                assert_eq!(*(add as *const u8), 255);
+            }
+            let o2_size = 256;
+            let o2_layout = Layout::from_size_align(o2_size, 8).unwrap();
+            let addr_2 = a.alloc(o2_layout);
+            libc::memset(addr_2 as Ptr, 233, o2_size);
+            for add in addr_1 as usize..addr_1 as usize + o1_size {
+                assert_eq!(*(add as *const u8), 255);
+            }
+            for add in addr_2 as usize..addr_2 as usize + o2_size {
+                assert_eq!(*(add as *const u8), 233);
+            }
+            a.dealloc(addr_1, o1_layout);
+            let addr_3 = a.alloc(o1_layout);
+            assert_eq!(addr_3, addr_1);
+            for add in addr_3 as usize..addr_3 as usize + o1_size {
+                assert_eq!(*(add as *const u8), 255);
+            }
+            libc::memset(addr_3 as Ptr, 24, o1_size);
+            for add in addr_3 as usize..addr_3 as usize + o1_size {
+                assert_eq!(*(add as *const u8), 24);
+            }
+            for add in addr_2 as usize..addr_2 as usize + o2_size {
+                assert_eq!(*(add as *const u8), 233);
+            }
+        }
+    }
+
+    #[test]
+    pub fn application() {
         let map = lfmap::WordMap::<BumpAllocator>::with_capacity(1024);
         for i in 5..10240 {
             map.insert(i, i * 2);
