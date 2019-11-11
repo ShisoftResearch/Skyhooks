@@ -50,6 +50,9 @@ pub unsafe fn nu_free(ptr: Ptr) {
 pub unsafe fn nu_calloc(nmemb: Size, size: Size) -> Ptr {
     let total_size = nmemb * size;
     let ptr = nu_malloc(total_size);
+    if ptr != null_mut() {
+        memset(ptr, 0, total_size);
+    }
     ptr
 }
 

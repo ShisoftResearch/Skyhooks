@@ -14,15 +14,19 @@ pub struct ObjectMeta {
 
 pub unsafe fn malloc(size: Size) -> Ptr {
     let max_small_size = *small_heap::MAXIMUM_SIZE;
-    let res = if size > max_small_size {
-        large_heap::allocate(size)
+    if size > max_small_size {
+        let res = large_heap::allocate(size);
+        if res == null_mut() {
+            panic!();
+        }
+        res
     } else {
-        small_heap::allocate(size)
-    };
-    if res == null_mut() {
-        panic!();
+        let res = small_heap::allocate(size);
+        if res == null_mut() {
+            panic!();
+        }
+        res
     }
-    res
 }
 
 pub unsafe fn free(ptr: Ptr) {
