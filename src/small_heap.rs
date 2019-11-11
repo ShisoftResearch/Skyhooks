@@ -374,13 +374,8 @@ fn thread_free_lists(size_classes: &TSizeClasses) -> TThreadFreeLists {
 }
 
 #[inline]
-fn per_node_heap() -> usize {
-    min_power_of_2(total_memory())
-}
-
-#[inline]
 fn total_heap() -> usize {
-    min_power_of_2(per_node_heap() * *NUM_NUMA_NODES)
+    min_power_of_2(total_memory() / 2)
 }
 
 fn min_power_of_2(mut n: usize) -> usize {
