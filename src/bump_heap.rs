@@ -152,7 +152,7 @@ unsafe impl GlobalAlloc for AllocatorInner {
             if actual_size < *SYS_PAGE_SIZE {
                 return;
             }
-            // dealloc_regional(actual_addr as Ptr, actual_size);
+            dealloc_regional(actual_addr as Ptr, actual_size);
         }
     }
 

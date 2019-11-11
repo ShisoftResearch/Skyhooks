@@ -37,7 +37,6 @@ lazy_static! {
 
 struct ThreadMeta {
     sizes: TSizeClasses,
-    objects: Arc<evmap::Producer<Object, BumpAllocator>>,
     numa: usize,
     tid: usize,
 }
@@ -47,7 +46,7 @@ struct NodeMeta {
     common: TCommonSizeClasses,
     pending_free: Option<RemoteNodeFree>,
     thread_free: lfmap::ObjectMap<TThreadFreeLists, BumpAllocator>,
-    objects: evmap::EvMap<Object, BumpAllocator>,
+    objects: lfmap::ObjectMap<Object, BumpAllocator>
 }
 
 struct SizeClass {
@@ -86,6 +85,7 @@ pub fn allocate(size: usize) -> Ptr {
     THREAD_META.with(|meta| {
         let size_class = &meta.sizes[size_class_index];
         // allocate memory inside the thread meta
+        let node = &PER_NODE_META[meta.numa];
         let addr = if let Some(freed) = size_class.free_list.pop() {
             // first, looking in the free list
             freed
@@ -93,7 +93,6 @@ pub fn allocate(size: usize) -> Ptr {
             // next, ask the reservation station for objects
             reserved
         } else {
-            let node = &PER_NODE_META[meta.numa];
             // allocate from node common list
             if let Some(freed) = node.common[size_class_index].free_list.pop() {
                 freed
@@ -104,7 +103,7 @@ pub fn allocate(size: usize) -> Ptr {
                     .allocate_from_common(size_class.size, size_class_index, &node)
             }
         };
-        meta.objects.insert(
+        node.objects.insert(
             addr,
             meta.object_map(size_class_index),
         );
@@ -116,7 +115,6 @@ pub fn contains(ptr: Ptr) -> bool {
     if !address_in_range(addr) { return false; }
     let node_id = addr_numa_id(addr);
     let node = &PER_NODE_META[node_id];
-    node.objects.refresh();
     node.objects.contains(addr)
 }
 pub fn free(ptr: Ptr) -> bool {
@@ -126,7 +124,6 @@ pub fn free(ptr: Ptr) -> bool {
     let node = &PER_NODE_META[node_id];
     THREAD_META.with(|meta| {
         let current_node = meta.numa;
-        node.objects.refresh();
         if let Some(pending_free) = &PER_NODE_META[current_node].pending_free {
             pending_free.free_all();
         }
@@ -162,7 +159,6 @@ pub fn size_of(ptr: Ptr) -> Option<usize> {
     if !address_in_range(addr) { return None }
     let node_id = addr_numa_id(addr);
     let node_meta = &PER_NODE_META[node_id];
-    node_meta.objects.refresh();
     THREAD_META.with(|meta| {
         node_meta.objects.get(addr).map(|o| meta.sizes[o.tier].size)
     })
@@ -177,14 +173,12 @@ impl ThreadMeta {
     pub fn new() -> Self {
         let numa_id = current_numa();
         let numa = &PER_NODE_META[numa_id];
-        let objects = numa.objects.new_producer();
         let size_classes = size_classes();
         let thread_free_lists = thread_free_lists(&size_classes);
         let tid = current_thread_id();
         numa.thread_free.insert(tid, thread_free_lists);
         Self {
             numa: numa_id,
-            objects,
             sizes: size_classes,
             tid,
         }
@@ -206,7 +200,6 @@ impl Drop for ThreadMeta {
             is_inner.set(true);
             let numa_id = self.numa;
             let numa = &PER_NODE_META[numa_id];
-            numa.objects.remove_producer(&self.objects);
             numa.thread_free.remove(self.tid);
             for (i, size_class) in self.sizes.into_iter().enumerate() {
                 let common = &numa.common[i];
@@ -360,7 +353,7 @@ fn gen_numa_node_list() -> Vec<NodeMeta> {
             common: common_size_classes(),
             pending_free: remote_free,
             thread_free: ObjectMap::with_capacity(128),
-            objects: evmap::EvMap::new(),
+            objects: lfmap::ObjectMap::with_capacity(1024),
         });
     }
     return nodes;
