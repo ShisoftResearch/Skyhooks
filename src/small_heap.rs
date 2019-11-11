@@ -337,11 +337,11 @@ impl RemoteNodeFree {
 
     pub fn free_all(&self) {
         while let Some(addr) = self.pending_free.pop() {
-            debug_assert_eq!(
-                addr_numa_id(addr),
-                current_numa(),
-                "Node freeing remote pending object"
-            );
+//            debug_assert_eq!(
+//                addr_numa_id(addr),
+//                current_numa(),
+//                "Node freeing remote pending object"
+//            );
             free(addr as Ptr);
         }
     }

@@ -17,26 +17,15 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 use core::{mem, ptr};
 use lfmap::Map;
 use libc::memcpy;
-use crate::collections::lflist;
-use crate::generic_heap::{NUM_SIZE_CLASS, size_class_index_from_size};
-use std::mem::MaybeUninit;
-
-type SizeClasses = [SizeClass; NUM_SIZE_CLASS];
 
 lazy_static! {
     static ref ALLOC_INNER: AllocatorInner = AllocatorInner::new();
     static ref MALLOC_SIZE: lfmap::WordMap<MmapAllocator> = lfmap::WordMap::<MmapAllocator>::with_capacity(1024);
-    static ref MAXIMUM_FREE_LIST_COVERED_SIZE: usize = maximum_free_list_covered_size();
 }
 
 pub struct AllocatorInner {
     tail: AtomicUsize,
-    addr: AtomicUsize
-}
-
-struct SizeClass {
-    size: usize,
-    free_list: lflist::List<usize, MmapAllocator>
+    addr: AtomicUsize,
 }
 
 pub const HEAP_VIRT_SIZE: usize = 2 * 1024 * 1024 * 1024; // 2GB
@@ -56,83 +45,73 @@ impl AllocatorInner {
         let addr = allocate_address_space();
         Self {
             addr: AtomicUsize::new(addr as usize),
-            tail: AtomicUsize::new(addr as usize)
+            tail: AtomicUsize::new(addr as usize),
         }
     }
 }
 
 unsafe impl GlobalAlloc for AllocatorInner {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let align = layout.align();
-        let size = layout.size();
-        let actual_size = actual_size(align, size);
-        let size_class_index = size_class_index_from_size(actual_size);
-        let origin_addr =
-        {
-            let mut current_tail = 0;
-            loop {
-                let addr = self.addr.load(Relaxed);
-                current_tail = self.tail.load(Relaxed);
-                let new_tail = current_tail + actual_size;
-                if new_tail > addr + HEAP_VIRT_SIZE {
-                    // may overflow the address space, need to allocate another address space
-                    // Fetch the old base address for reference in CAS
-                    let new_base = allocate_address_space();
-                    if self
-                        .addr
-                        .compare_and_swap(addr, new_base as usize, Ordering::Relaxed)
-                        != addr
-                    {
-                        // CAS base address failed, give up and release allocated address space
-                        // Other thread is also trying to allocate address space and succeeded
-                        dealloc_address_space(new_base);
-                    } else {
-                        // update tail by store. This will fail all ongoing allocation and retry
-                        self.tail.store(new_base as usize, Ordering::Relaxed);
-                    }
-                    // Anyhow, skip follow statements and retry
-                    continue;
-                }
+        let mut align = layout.align();
+        if align < 8 {
+            align = 8;
+        }
+        let word_size = mem::size_of::<usize>();
+        loop {
+            let addr = self.addr.load(Relaxed);
+            let current_tail = self.tail.load(Relaxed);
+            let current_tail_with_start = current_tail + word_size;
+            let tail_align_padding = align_padding(current_tail_with_start, align);
+            let actual_size = layout.size() + word_size + tail_align_padding;
+            let new_tail = current_tail + actual_size;
+            if new_tail > addr + HEAP_VIRT_SIZE {
+                // may overflow the address space, need to allocate another address space
+                // Fetch the old base address for reference in CAS
+                let new_base = allocate_address_space();
                 if self
-                    .tail
-                    .compare_and_swap(current_tail, new_tail, Ordering::Relaxed)
-                    == current_tail
+                    .addr
+                    .compare_and_swap(addr, new_base as usize, Ordering::Relaxed)
+                    != addr
                 {
-                    debug_assert!(current_tail > 0);
-                    debug_assert!(current_tail >= addr);
-                    break
+                    // CAS base address failed, give up and release allocated address space
+                    // Other thread is also trying to allocate address space and succeeded
+                    dealloc_address_space(new_base);
+                } else {
+                    // update tail by store. This will fail all ongoing allocation and retry
+                    self.tail.store(new_base as usize, Ordering::Relaxed);
                 }
-                // CAS tail failed, retry
+                // Anyhow, skip follow statements and retry
+                continue;
             }
-            debug_assert_ne!(current_tail, 0);
-            current_tail
-        };
-        let align_padding = align_padding(origin_addr, align);
-        let final_addr = origin_addr + align_padding;
-        debug_assert_ne!(final_addr, 0);
-        debug_assert_eq!(final_addr % align, 0);
-        debug_assert!(final_addr > 0x50);
-        return final_addr as *mut u8;
+            if self
+                .tail
+                .compare_and_swap(current_tail, new_tail, Ordering::Relaxed)
+                == current_tail
+            {
+                let meta_loc = current_tail + tail_align_padding;
+                ptr::write(meta_loc as *mut usize, current_tail);
+                debug_assert!(current_tail > 0);
+                let final_addr = current_tail + word_size + tail_align_padding;
+                debug_assert!(final_addr > addr);
+                return final_addr as *mut u8;
+            }
+            // CAS tail failed, retry
+        }
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        let align = layout.align();
-        let size = layout.size();
-        let actual_size = actual_size(align, size);
-        let size_class_index = size_class_index_from_size(actual_size);
-
-        let addr = ptr as usize;
-        let actual_addr = addr;
-
         // use system call to invalidate underlying physical memory (pages)
         debug!("Dealloc {}", ptr as usize);
-        // Will not dealloc objects smaller than page size in physical memory
-        if actual_size < *SYS_PAGE_SIZE {
+        // Will not dealloc objects smaller than half page size
+        if layout.size() < (*SYS_PAGE_SIZE) {
             return;
         }
-        dealloc_regional(actual_addr as Ptr, actual_size);
+        let ptr_pos = ptr as usize;
+        let start_pos = ptr_pos - mem::size_of::<usize>();
+        let starts = ptr::read(start_pos as *const usize);
+        let padding = ptr_pos - starts;
+        dealloc_regional(starts as Ptr, layout.size() + padding);
     }
-
 }
 
 unsafe impl Alloc for BumpAllocator {
@@ -142,15 +121,6 @@ unsafe impl Alloc for BumpAllocator {
 
     unsafe fn dealloc(&mut self, ptr: ptr::NonNull<u8>, layout: Layout) {
         ALLOC_INNER.dealloc(ptr.as_ptr(), layout)
-    }
-}
-
-impl SizeClass {
-    pub fn new(size: usize) -> Self {
-        Self {
-            size,
-            free_list: lflist::List::new()
-        }
     }
 }
 
@@ -186,30 +156,8 @@ pub unsafe fn free(ptr: Ptr) -> bool {
     }
 }
 
-fn size_classes() -> SizeClasses {
-    let mut data: [MaybeUninit<SizeClass>; NUM_SIZE_CLASS] =
-        unsafe { MaybeUninit::uninit().assume_init() };
-    let mut size = 2;
-    for elem in &mut data[..] {
-        *elem = MaybeUninit::new(SizeClass::new(size));
-        size *= 2;
-    }
-    unsafe { mem::transmute::<_, SizeClasses>(data) }
-}
-
-#[inline(always)]
 pub fn size_of(ptr: Ptr) -> Option<usize> {
     MALLOC_SIZE.get(ptr as usize)
-}
-
-#[inline(always)]
-fn maximum_free_list_covered_size() -> usize {
-    size_classes()[NUM_SIZE_CLASS - 1].size
-}
-
-#[inline(always)]
-fn actual_size(align: usize, size: usize) -> usize {
-    size + align - 1
 }
 
 pub unsafe fn realloc(ptr: Ptr, size: Size) -> Ptr {
@@ -234,24 +182,4 @@ pub unsafe fn realloc(ptr: Ptr, size: Size) -> Ptr {
     memcpy(new_ptr, ptr, old_size);
     free(ptr);
     new_ptr
-}
-
-#[cfg(test)]
-mod test {
-    use crate::bump_heap::BumpAllocator;
-    use lfmap::Map;
-
-    #[test]
-    pub fn general() {
-        let map = lfmap::WordMap::<BumpAllocator>::with_capacity(1024);
-        for i in 5..10240 {
-            map.insert(i, i * 2);
-        }
-        for i in 5..10240 {
-            assert_eq!(map.get(i), Some(i * 2), "index: {}", i);
-        }
-        for i in 5..10240 {
-            assert_eq!(map.remove(i), Some(i * 2), "index: {}", i);
-        }
-    }
 }
