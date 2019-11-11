@@ -4,6 +4,8 @@
 use crate::Ptr;
 use crate::utils::align_padding;
 use crate::utils::SYS_PAGE_SIZE;
+use crate::mmap_heap::MmapAllocator;
+use core::alloc::{Alloc, Layout};
 
 pub unsafe fn allocate(size: usize) -> Ptr {
     let page_size = *SYS_PAGE_SIZE;
@@ -12,7 +14,8 @@ pub unsafe fn allocate(size: usize) -> Ptr {
     if total_size < crate::bump_heap::HEAP_VIRT_SIZE {
         crate::bump_heap::malloc(total_size)
     } else {
-        unimplemented!()
+        let mut ma = MmapAllocator;
+        ma.alloc(Layout::from_size_align(size, 1).unwrap()).unwrap().as_ptr() as Ptr
     }
 }
 pub unsafe fn free(ptr: Ptr) -> bool {

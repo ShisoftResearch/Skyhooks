@@ -2,7 +2,7 @@ use super::*;
 use crate::collections::evmap;
 use crate::collections::fixvec::FixedVec;
 use crate::collections::lflist;
-use crate::generic_heap::ObjectMeta;
+use crate::generic_heap::{ObjectMeta, NUM_SIZE_CLASS, size_class_index_from_size, log_2_of};
 use crate::mmap::mmap_without_fd;
 use crate::utils::*;
 use core::mem;
@@ -16,8 +16,6 @@ use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;
 use std::thread;
 use std::clone::Clone;
-
-const NUM_SIZE_CLASS: usize = 16;
 
 type SharedFreeList = Arc<lflist::List<usize>>;
 type TSizeClasses = [SizeClass; NUM_SIZE_CLASS];
@@ -222,9 +220,9 @@ impl Drop for ThreadMeta {
 }
 
 impl SizeClass {
-    pub fn new(tier: usize) -> Self {
+    pub fn new(size: usize) -> Self {
         Self {
-            size: tier,
+            size,
             reserved: ReservedPage::new(),
             free_list: Arc::new(lflist::List::new()),
         }
@@ -366,10 +364,10 @@ fn gen_numa_node_list() -> Vec<NodeMeta> {
 fn size_classes() -> TSizeClasses {
     let mut data: [MaybeUninit<SizeClass>; NUM_SIZE_CLASS] =
         unsafe { MaybeUninit::uninit().assume_init() };
-    let mut tier = 2;
+    let mut size = 2;
     for elem in &mut data[..] {
-        *elem = MaybeUninit::new(SizeClass::new(tier));
-        tier *= 2;
+        *elem = MaybeUninit::new(SizeClass::new(size));
+        size *= 2;
     }
     unsafe { mem::transmute::<_, TSizeClasses>(data) }
 }
@@ -422,27 +420,11 @@ fn min_power_of_2(mut n: usize) -> usize {
 }
 
 #[inline(always)]
-fn log_2_of(num: usize) -> usize {
-    mem::size_of::<usize>() * 8 - num.leading_zeros() as usize - 1
-}
-
-#[inline(always)]
 fn addr_numa_id(addr: usize) -> usize {
     let offset = addr - *HEAP_BASE;
     let shift_bits = *NODE_SHIFT_BITS;
     let res = offset >> shift_bits;
     res
-}
-
-#[inline(always)]
-fn size_class_index_from_size(size: usize) -> usize {
-    debug_assert!(size > 0);
-    let log = log_2_of(size);
-    if is_power_of_2(size) && log > 0 {
-        log - 1
-    } else {
-        log
-    }
 }
 
 #[inline(always)]
