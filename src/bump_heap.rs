@@ -83,6 +83,7 @@ unsafe impl GlobalAlloc for AllocatorInner {
             debug_assert!(size_class_size >= actual_size);
             actual_size = size_class_size;
         } else {
+            actual_size = actual_size + align_padding(actual_size, *SYS_PAGE_SIZE);
             debug!("allocate large {}", actual_size);
         }
         let origin_addr = self
@@ -147,6 +148,7 @@ unsafe impl GlobalAlloc for AllocatorInner {
             let actual_size = obj.size;
             let size_class_index = size_class_index_from_size(actual_size);
             if size_class_index < self.sizes.len() {
+                libc::memset(actual_addr as Ptr, 0, actual_size);
                 self.sizes[size_class_index].free_list.push(actual_addr);
             }
             if actual_size > *SYS_PAGE_SIZE {
@@ -267,6 +269,7 @@ mod test {
     use std::alloc::{GlobalAlloc, Layout};
 
     #[test]
+    #[ignore]
     pub fn generic() {
         unsafe {
             let a = BumpAllocator;
