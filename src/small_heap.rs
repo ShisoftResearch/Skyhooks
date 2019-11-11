@@ -15,8 +15,7 @@ use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;
 use std::thread;
 use std::clone::Clone;
-
-const NUM_SIZE_CLASS: usize = 16;
+use crate::generic_heap::{NUM_SIZE_CLASS, size_class_index_from_size, log_2_of};
 
 type SharedFreeList = Arc<lflist::List<usize>>;
 type TSizeClasses = [SizeClass; NUM_SIZE_CLASS];
@@ -300,35 +299,8 @@ impl ReservedPage {
 impl RemoteNodeFree {
     pub fn new(node_id: usize) -> Self {
         let list = Arc::new(lflist::List::new());
-        // The original design is to have a sentinel thread for each NUMA node to
-        // do the free job. The problem is, in Linux, creating thread also invokes malloc and friends,
-        // does not work well with thread local storage as well.
-        // Thus, I have to abandon this approach and free by invoking free function from threads
-        // within this NUMA node. Which is sad :(
-//        let list_clone = list.clone();
-//        let handle = thread::Builder::new()
-//            .name(format!("remote-free-{}", node_id))
-//            .spawn(move || {
-//                loop {
-//                    if let Some(addr) = list_clone.pop() {
-//                        debug_assert_eq!(
-//                            addr_numa_id(addr),
-//                            node_id,
-//                            "Node freeing remote pending object"
-//                        );
-//                        free(addr as Ptr);
-//                    } else {
-//                        thread::park();
-//                    }
-//                }
-//            })
-//            .unwrap();
-//        let pthread = handle.as_pthread_t();
-//        let thread = handle.thread().clone();
-//        set_node_affinity(node_id, pthread as u64);
         Self {
-            pending_free: list,
-            // sentinel_thread: thread,
+            pending_free: list
         }
     }
 
@@ -340,11 +312,11 @@ impl RemoteNodeFree {
 
     pub fn free_all(&self) {
         while let Some(addr) = self.pending_free.pop() {
-            debug_assert_eq!(
-                addr_numa_id(addr),
-                current_numa(),
-                "Node freeing remote pending object"
-            );
+//            debug_assert_eq!(
+//                addr_numa_id(addr),
+//                current_numa(),
+//                "Node freeing remote pending object"
+//            );
             free(addr as Ptr);
         }
     }
@@ -428,27 +400,11 @@ fn min_power_of_2(mut n: usize) -> usize {
 }
 
 #[inline(always)]
-fn log_2_of(num: usize) -> usize {
-    mem::size_of::<usize>() * 8 - num.leading_zeros() as usize - 1
-}
-
-#[inline(always)]
 fn addr_numa_id(addr: usize) -> usize {
     let offset = addr - *HEAP_BASE;
     let shift_bits = *NODE_SHIFT_BITS;
     let res = offset >> shift_bits;
     res
-}
-
-#[inline(always)]
-fn size_class_index_from_size(size: usize) -> usize {
-    debug_assert!(size > 0);
-    let log = log_2_of(size);
-    if is_power_of_2(size) && log > 0 {
-        log - 1
-    } else {
-        log
-    }
 }
 
 #[inline(always)]
