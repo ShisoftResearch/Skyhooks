@@ -140,35 +140,37 @@ impl<T, A: Alloc + Default> List<T, A> {
             return res;
         }
     }
-    pub fn drop_out_all(&self) -> Vec<T> {
-        let mut res = vec![];
+    pub fn drop_out_all(&self) -> Option<Vec<T>> {
         if self.count.load(Relaxed) == 0 {
-            return res;
+            return None;
         }
+        let mut res = Vec::new();
         let new_head_buffer = BufferMeta::new();
         let mut buffer_ptr = self.head.swap(new_head_buffer, Relaxed);
         'main: while buffer_ptr != null_mut() {
             let buffer = BufferMeta::borrow(buffer_ptr);
             let next_ptr = buffer.next.load(Relaxed);
             loop {
-                //wait until reference counter reach 2 (one for not garbage one for current reference)
-                let rc = buffer.refs.load(Relaxed);
-                if rc == 2 {
-                    break;
-                } else if rc <= 1 {
-                    // means the buffer have already been mark as garbage, should skip this one
+                //wait until reference counter reach 2 one for not garbage one for current reference)
+                let flag = 1 << mem::size_of::<usize>();
+                let ref_num = buffer.refs.compare_and_swap(2, flag, Relaxed);
+                if ref_num >= flag {
+                    // dropping out by another thread, break
+                    break 'main;
+                } else if ref_num <= 1 {
+                    // this buffer is marked to be gc, untouched
+                    break 'main;
+                } else if ref_num == 2 {
+                    // no other reference, flush and break out waiting
+                    res.append(&mut BufferMeta::flush_buffer(&*buffer));
+                    BufferMeta::unref(buffer_ptr);
                     buffer_ptr = next_ptr;
-                    continue 'main;
-                } else {
-                    continue;
+                    break;
                 }
             }
-            res.append(&mut BufferMeta::flush_buffer(&*buffer));
-            BufferMeta::unref(buffer_ptr);
-            buffer_ptr = next_ptr;
         }
         self.count.fetch_sub(res.len(), Relaxed);
-        return res;
+        return Some(res);
     }
 
     pub fn prepend_with(&self, other: &Self) {
@@ -321,7 +323,7 @@ mod test {
         list.push(32);
         list.push(25);
         assert_eq!(list.count(), 2);
-        assert_eq!(list.drop_out_all(), vec![32, 25]);
+        assert_eq!(list.drop_out_all(), Some(vec![32, 25]));
         assert_eq!(list.count(), 0);
     }
 

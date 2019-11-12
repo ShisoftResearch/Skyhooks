@@ -42,6 +42,14 @@ pub fn no_huge_page(ptr: Ptr, size: usize) {
 #[inline]
 pub fn no_huge_page(ptr: Ptr, size: usize) {}
 
+#[cfg(target_os = "linux")]
+#[inline]
+pub fn dealloc_regional(addr: Ptr, size: usize) -> usize {
+    unsafe { madvise(addr, size, MADV_FREE) as usize }
+}
+
+#[cfg(not(target_os = "linux"))]
+#[inline]
 pub fn dealloc_regional(addr: Ptr, size: usize) -> usize {
     unsafe { madvise(addr, size, MADV_DONTNEED) as usize }
 }

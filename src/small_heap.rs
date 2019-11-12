@@ -1,5 +1,4 @@
 use super::*;
-use crate::collections::evmap;
 use crate::collections::fixvec::FixedVec;
 use crate::collections::lflist;
 use crate::generic_heap::{ObjectMeta, NUM_SIZE_CLASS, size_class_index_from_size, log_2_of};
@@ -305,8 +304,10 @@ impl RemoteNodeFree {
     }
 
     pub fn free_all(&self) {
-        while let Some(addr) = self.pending_free.pop() {
-            free(addr as Ptr);
+        if let Some(to_free) = self.pending_free.drop_out_all() {
+            for addr in to_free {
+                free(addr as Ptr);
+            }
         }
     }
 }
