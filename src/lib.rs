@@ -54,4 +54,10 @@ pub unsafe fn realloc(ptr: Ptr, size: Size) -> Ptr {
 }
 
 #[global_allocator]
+#[cfg(not(feature = "bump_heap_only"))]
 static INNER_ALLOCATOR: NullocAllocator = NullocAllocator;
+
+#[global_allocator]
+#[cfg(feature = "bump_heap_only")]
+static INNER_ALLOCATOR: BumpAllocator = BumpAllocator;
+
