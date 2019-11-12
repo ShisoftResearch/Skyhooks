@@ -407,11 +407,6 @@ fn maximum_size() -> usize {
     size_classes()[NUM_SIZE_CLASS - 1].size
 }
 
-#[inline]
-pub fn warm_up() {
-    // let _ = *PER_NODE_META;
-}
-
 #[cfg(test)]
 mod test {
     use crate::small_heap::{allocate, free};
