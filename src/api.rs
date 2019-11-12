@@ -22,7 +22,6 @@ pub unsafe fn nu_malloc(size: Size) -> Ptr {
     let ptr = INNER_CALL.with(|is_inner| {
         if !is_inner.get() {
             is_inner.set(true);
-            crate::small_heap::warm_up();
             let res = generic_heap::malloc(size);
             is_inner.set(false);
             res
@@ -39,7 +38,6 @@ pub unsafe fn nu_free(ptr: Ptr) {
     INNER_CALL.with(|is_inner| {
         if !is_inner.get() {
             is_inner.set(true);
-            crate::small_heap::warm_up();
             generic_heap::free(ptr);
             is_inner.set(false);
         } else {
