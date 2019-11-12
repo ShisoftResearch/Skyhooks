@@ -7,28 +7,42 @@
 // Because we cannot use heap in this allocator, meta data will not be kept, dealloc will free
 // memory space immediately. It is very unsafe.
 
+use crate::collections::lflist;
+use crate::generic_heap::{size_class_index_from_size, NUM_SIZE_CLASS};
 use crate::mmap::{dealloc_regional, mmap_without_fd, munmap_memory};
+use crate::mmap_heap::*;
 use crate::utils::*;
 use crate::{Ptr, Size, NULL_PTR};
-use crate::mmap_heap::*;
-use core::alloc::{GlobalAlloc, Layout, Alloc, AllocErr};
+use core::alloc::{Alloc, AllocErr, GlobalAlloc, Layout};
 use core::sync::atomic::Ordering::Relaxed;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use core::{mem, ptr};
 use lfmap::Map;
-use libc::memcpy;
+use std::mem::MaybeUninit;
+use libc::*;
+
+type SizeClasses = [SizeClass; NUM_SIZE_CLASS];
 
 lazy_static! {
     static ref ALLOC_INNER: AllocatorInner = AllocatorInner::new();
-    static ref MALLOC_SIZE: lfmap::WordMap<MmapAllocator> = lfmap::WordMap::<MmapAllocator>::with_capacity(1024);
+    static ref MALLOC_SIZE: lfmap::WordMap<MmapAllocator> =
+        lfmap::WordMap::<MmapAllocator>::with_capacity(1024);
+    static ref MAXIMUM_FREE_LIST_COVERED_SIZE: usize = maximum_free_list_covered_size();
 }
 
 pub struct AllocatorInner {
     tail: AtomicUsize,
-    addr: AtomicUsize,
+    base: AtomicUsize,
+    address_map: lfmap::WordMap<MmapAllocator>,
+    sizes: SizeClasses,
 }
 
-pub const HEAP_VIRT_SIZE: usize = 2 * 1024 * 1024 * 1024; // 2GB
+struct SizeClass {
+    size: usize,
+    free_list: lflist::List<usize, MmapAllocator>,
+}
+
+pub const HEAP_VIRT_SIZE: usize = 64 * 1024 * 1024; // 64MB
 
 fn allocate_address_space() -> Ptr {
     mmap_without_fd(HEAP_VIRT_SIZE)
@@ -44,73 +58,102 @@ impl AllocatorInner {
     pub fn new() -> Self {
         let addr = allocate_address_space();
         Self {
-            addr: AtomicUsize::new(addr as usize),
+            base: AtomicUsize::new(addr as usize),
             tail: AtomicUsize::new(addr as usize),
+            address_map: lfmap::WordMap::with_capacity(1024),
+            sizes: size_classes(),
+        }
+    }
+
+    fn bump_allocate(&self, size: usize) -> usize {
+        loop {
+            let base = self.base.load(Relaxed);
+            let current_tail = self.tail.load(Relaxed);
+            let new_tail = current_tail + size;
+            if new_tail > base + HEAP_VIRT_SIZE {
+                // may overflow the address space, need to allocate another address space
+                // Fetch the old base address for reference in CAS
+                self.swap_memory(base);
+                // Anyhow, skip follow statements and retry
+                continue;
+            }
+            if self
+                .tail
+                .compare_and_swap(current_tail, new_tail, Ordering::SeqCst)
+                == current_tail
+            {
+                debug_assert!(current_tail > 0);
+                debug_assert!(current_tail >= base);
+                debug_assert!(current_tail < base + HEAP_VIRT_SIZE);
+                debug_validate(current_tail as Ptr, size);
+                return current_tail;
+            }
+            // CAS tail failed, retry
+        }
+    }
+
+    fn size_of_object(&self, layout: &Layout) -> (usize, usize) {
+        let align = layout.align();
+        let size = layout.size();
+        let mut actual_size = actual_size_of(align, size);
+        let size_class_index = size_class_index_from_size(actual_size);
+        if size_class_index < self.sizes.len() {
+            let size_class_size = self.sizes[size_class_index].size;
+            debug_assert!(size_class_size >= actual_size);
+            actual_size = size_class_size;
+        } else {
+            actual_size = actual_size + align_padding(actual_size, *SYS_PAGE_SIZE);
+            debug!("allocate large {}", actual_size);
+        }
+        (actual_size, size_class_index)
+    }
+
+    fn swap_memory(&self, old_base: usize) {
+        let new_base = allocate_address_space();
+        if self
+            .base
+            .compare_and_swap(old_base, new_base as usize, Ordering::Relaxed)
+            != old_base
+        {
+            // CAS base address failed, give up and release allocated address space
+            // Other thread is also trying to allocate address space and succeeded
+            dealloc_address_space(new_base);
+        } else {
+            // update tail by store. This will fail all ongoing allocation and retry
+            self.tail.store(new_base as usize, Ordering::SeqCst);
         }
     }
 }
 
 unsafe impl GlobalAlloc for AllocatorInner {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let mut align = layout.align();
-        if align < 8 {
-            align = 8;
-        }
-        let word_size = mem::size_of::<usize>();
-        loop {
-            let addr = self.addr.load(Relaxed);
-            let current_tail = self.tail.load(Relaxed);
-            let current_tail_with_start = current_tail + word_size;
-            let tail_align_padding = align_padding(current_tail_with_start, align);
-            let actual_size = layout.size() + word_size + tail_align_padding;
-            let new_tail = current_tail + actual_size;
-            if new_tail > addr + HEAP_VIRT_SIZE {
-                // may overflow the address space, need to allocate another address space
-                // Fetch the old base address for reference in CAS
-                let new_base = allocate_address_space();
-                if self
-                    .addr
-                    .compare_and_swap(addr, new_base as usize, Ordering::Relaxed)
-                    != addr
-                {
-                    // CAS base address failed, give up and release allocated address space
-                    // Other thread is also trying to allocate address space and succeeded
-                    dealloc_address_space(new_base);
-                } else {
-                    // update tail by store. This will fail all ongoing allocation and retry
-                    self.tail.store(new_base as usize, Ordering::Relaxed);
-                }
-                // Anyhow, skip follow statements and retry
-                continue;
-            }
-            if self
-                .tail
-                .compare_and_swap(current_tail, new_tail, Ordering::Relaxed)
-                == current_tail
-            {
-                let meta_loc = current_tail + tail_align_padding;
-                ptr::write(meta_loc as *mut usize, current_tail);
-                debug_assert!(current_tail > 0);
-                let final_addr = current_tail + word_size + tail_align_padding;
-                debug_assert!(final_addr > addr);
-                return final_addr as *mut u8;
-            }
-            // CAS tail failed, retry
-        }
+        let align = layout.align();
+        let (actual_size, size_class_index) = self.size_of_object(&layout);
+        let origin_addr = self
+            .sizes
+            .get(size_class_index)
+            .and_then(|sc| sc.free_list.pop())
+            .unwrap_or_else(|| self.bump_allocate(actual_size));
+        let align_padding = align_padding(origin_addr, align);
+        let final_addr = origin_addr + align_padding;
+        self.address_map.insert(final_addr, origin_addr);
+        debug_validate(final_addr as Ptr, actual_size);
+        return final_addr as *mut u8;
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        // use system call to invalidate underlying physical memory (pages)
-        debug!("Dealloc {}", ptr as usize);
-        // Will not dealloc objects smaller than half page size
-        if layout.size() < (*SYS_PAGE_SIZE) {
-            return;
+        let (actual_size, size_class_index) = self.size_of_object(&layout);
+        let addr = ptr as usize;
+        if let Some(actual_addr) = self.address_map.remove(addr) {
+            let size_class_index = size_class_index_from_size(actual_size);
+            if size_class_index < self.sizes.len() {
+                debug_validate(ptr as Ptr, actual_size);
+                self.sizes[size_class_index].free_list.push(actual_addr);
+            }
+            if actual_size > *SYS_PAGE_SIZE {
+                dealloc_regional(actual_addr as Ptr, actual_size);
+            }
         }
-        let ptr_pos = ptr as usize;
-        let start_pos = ptr_pos - mem::size_of::<usize>();
-        let starts = ptr::read(start_pos as *const usize);
-        let padding = ptr_pos - starts;
-        dealloc_regional(starts as Ptr, layout.size() + padding);
     }
 }
 
@@ -121,6 +164,15 @@ unsafe impl Alloc for BumpAllocator {
 
     unsafe fn dealloc(&mut self, ptr: ptr::NonNull<u8>, layout: Layout) {
         ALLOC_INNER.dealloc(ptr.as_ptr(), layout)
+    }
+}
+
+impl SizeClass {
+    pub fn new(size: usize) -> Self {
+        Self {
+            size,
+            free_list: lflist::List::new(),
+        }
     }
 }
 
@@ -137,7 +189,9 @@ unsafe impl GlobalAlloc for BumpAllocator {
 }
 
 impl Default for BumpAllocator {
-    fn default() -> Self { Self }
+    fn default() -> Self {
+        Self
+    }
 }
 
 pub unsafe fn malloc(size: Size) -> Ptr {
@@ -156,8 +210,30 @@ pub unsafe fn free(ptr: Ptr) -> bool {
     }
 }
 
+fn size_classes() -> SizeClasses {
+    let mut data: [MaybeUninit<SizeClass>; NUM_SIZE_CLASS] =
+        unsafe { MaybeUninit::uninit().assume_init() };
+    let mut size = 2;
+    for elem in &mut data[..] {
+        *elem = MaybeUninit::new(SizeClass::new(size));
+        size *= 2;
+    }
+    unsafe { mem::transmute::<_, SizeClasses>(data) }
+}
+
+#[inline]
 pub fn size_of(ptr: Ptr) -> Option<usize> {
     MALLOC_SIZE.get(ptr as usize)
+}
+
+#[inline]
+fn maximum_free_list_covered_size() -> usize {
+    size_classes()[NUM_SIZE_CLASS - 1].size
+}
+
+#[inline]
+fn actual_size_of(align: usize, size: usize) -> usize {
+    size + align - 1
 }
 
 pub unsafe fn realloc(ptr: Ptr, size: Size) -> Ptr {
@@ -182,4 +258,64 @@ pub unsafe fn realloc(ptr: Ptr, size: Size) -> Ptr {
     memcpy(new_ptr, ptr, old_size);
     free(ptr);
     new_ptr
+}
+
+#[cfg(test)]
+mod test {
+    use crate::bump_heap::BumpAllocator;
+    use crate::Ptr;
+    use lfmap::Map;
+    use std::alloc::{GlobalAlloc, Layout};
+
+    #[test]
+    #[ignore]
+    pub fn generic() {
+        unsafe {
+            let a = BumpAllocator;
+            let o1_size = 128;
+            let o1_layout = Layout::from_size_align(o1_size, 8).unwrap();
+            let addr_1 = a.alloc(o1_layout);
+            libc::memset(addr_1 as Ptr, 255, o1_size);
+            for add in addr_1 as usize..addr_1 as usize + o1_size {
+                assert_eq!(*(add as *const u8), 255);
+            }
+            let o2_size = 256;
+            let o2_layout = Layout::from_size_align(o2_size, 8).unwrap();
+            let addr_2 = a.alloc(o2_layout);
+            libc::memset(addr_2 as Ptr, 233, o2_size);
+            for add in addr_1 as usize..addr_1 as usize + o1_size {
+                assert_eq!(*(add as *const u8), 255);
+            }
+            for add in addr_2 as usize..addr_2 as usize + o2_size {
+                assert_eq!(*(add as *const u8), 233);
+            }
+            a.dealloc(addr_1, o1_layout);
+            let addr_3 = a.alloc(o1_layout);
+            assert_eq!(addr_3, addr_1);
+            for add in addr_3 as usize..addr_3 as usize + o1_size {
+                assert_eq!(*(add as *const u8), 255);
+            }
+            libc::memset(addr_3 as Ptr, 24, o1_size);
+            for add in addr_3 as usize..addr_3 as usize + o1_size {
+                assert_eq!(*(add as *const u8), 24);
+            }
+            for add in addr_2 as usize..addr_2 as usize + o2_size {
+                assert_eq!(*(add as *const u8), 233);
+            }
+        }
+    }
+
+    #[test]
+    pub fn application() {
+        let map = lfmap::WordMap::<BumpAllocator>::with_capacity(1024);
+        for i in 5..10240 {
+            map.insert(i, i * 2);
+        }
+        for i in 5..10240 {
+            assert_eq!(map.get(i), Some(i * 2), "index: {}", i);
+        }
+        for i in 5..10240 {
+            assert_eq!(map.remove(i), Some(i * 2), "index: {}", i);
+        }
+    }
 }
