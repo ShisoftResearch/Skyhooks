@@ -162,7 +162,7 @@ impl<T, A: Alloc + Default> List<T, A> {
                     break 'main;
                 } else if ref_num == 2 {
                     // no other reference, flush and break out waiting
-                    res.append(&mut BufferMeta::flush_buffer(&*buffer));
+                    BufferMeta::flush_buffer(&*buffer, Some(&mut res));
                     BufferMeta::unref(buffer_ptr);
                     buffer_ptr = next_ptr;
                     break;
@@ -248,28 +248,31 @@ impl<T, A: Alloc + Default> BufferMeta<T, A> {
     }
 
     fn gc(buffer: *mut Self) {
-        for obj in Self::flush_buffer(unsafe { &*buffer }) {
+        let page_size = *SYS_PAGE_SIZE;
+        let mut objs = Vec::with_capacity(page_size);
+        Self::flush_buffer(unsafe { &*buffer }, Some(&mut objs));
+        for obj in objs {
             drop(obj)
         }
-        dealloc_mem::<T, A>(buffer as usize, *SYS_PAGE_SIZE)
+        dealloc_mem::<T, A>(buffer as usize, page_size)
     }
 
-    fn flush_buffer(buffer: &Self) -> Vec<T> {
+    fn flush_buffer(buffer: &Self, mut retain: Option<&mut Vec<T>>) {
         let size_of_obj = mem::size_of::<T>();
         let mut addr = buffer.lower_bound;
         let data_bound = buffer.head.load(Relaxed);
-        let mut res = vec![];
         if data_bound <= buffer.upper_bound {
             // this buffer is not empty
             while addr < data_bound {
                 let ptr = addr as *mut T;
                 let obj = unsafe { ptr::read(ptr) };
-                res.push(obj);
+                if let Some(ref mut res) = retain {
+                    res.push(obj);
+                }
                 addr += size_of_obj;
             }
         }
         buffer.head.store(buffer.lower_bound, Relaxed);
-        return res;
     }
 
     fn borrow(buffer: *mut Self) -> BufferRef<T, A> {

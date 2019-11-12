@@ -6,6 +6,7 @@ use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;
 use crate::utils::{current_cpu, NUM_CPU};
 use std::marker::PhantomData;
+use core::cell::Cell;
 
 type EvBins<V> = Arc<Vec<lflist::List<(usize, V)>>>;
 
@@ -41,16 +42,15 @@ impl<V: Clone> EvMap<V> {
 
     pub fn refresh(&self) {
         // get all items from producers and insert into the local map
-        let items = {
-            self.source
-                .iter()
-                .filter_map(|p| p.drop_out_all())
-                .flatten()
-                .collect::<Vec<_>>()
-        };
-        for (k, v) in items {
-            self.map.insert(k, v);
-        }
+        self.source
+            .iter()
+            .for_each(|p| {
+                if let Some(items) = p.drop_out_all() {
+                    for (k, v) in items {
+                        self.map.insert(k, v);
+                    }
+                }
+            })
     }
 
     #[inline]
@@ -78,6 +78,7 @@ impl<V> Producer<V> {
     #[inline]
     pub fn insert(&self, key: usize, value: V) {
         // current_cpu is cheap in Linux: 16 ns/iter (+/- 1)
+        // Have to get current cpu in real-time or the affinity won't work
         self.cache[current_cpu()].exclusive_push((key, value));
     }
 }
