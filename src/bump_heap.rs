@@ -32,7 +32,7 @@ lazy_static! {
 
 pub struct AllocatorInner {
     tail: AtomicUsize,
-    addr: AtomicUsize,
+    base: AtomicUsize,
     address_map: lfmap::WordMap<MmapAllocator>,
     sizes: SizeClasses,
 }
@@ -58,7 +58,7 @@ impl AllocatorInner {
     pub fn new() -> Self {
         let addr = allocate_address_space();
         Self {
-            addr: AtomicUsize::new(addr as usize),
+            base: AtomicUsize::new(addr as usize),
             tail: AtomicUsize::new(addr as usize),
             address_map: lfmap::WordMap::with_capacity(1024),
             sizes: size_classes(),
@@ -67,25 +67,13 @@ impl AllocatorInner {
 
     fn bump_allocate(&self, size: usize) -> usize {
         loop {
-            let addr = self.addr.load(Relaxed);
+            let base = self.base.load(Relaxed);
             let current_tail = self.tail.load(Relaxed);
             let new_tail = current_tail + size;
-            if new_tail > addr + HEAP_VIRT_SIZE {
+            if new_tail > base + HEAP_VIRT_SIZE {
                 // may overflow the address space, need to allocate another address space
                 // Fetch the old base address for reference in CAS
-                let new_base = allocate_address_space();
-                if self
-                    .addr
-                    .compare_and_swap(addr, new_base as usize, Ordering::Relaxed)
-                    != addr
-                {
-                    // CAS base address failed, give up and release allocated address space
-                    // Other thread is also trying to allocate address space and succeeded
-                    dealloc_address_space(new_base);
-                } else {
-                    // update tail by store. This will fail all ongoing allocation and retry
-                    self.tail.store(new_base as usize, Ordering::SeqCst);
-                }
+                self.swap_memory(base);
                 // Anyhow, skip follow statements and retry
                 continue;
             }
@@ -95,8 +83,8 @@ impl AllocatorInner {
                 == current_tail
             {
                 debug_assert!(current_tail > 0);
-                debug_assert!(current_tail >= addr);
-                debug_assert!(current_tail < addr + HEAP_VIRT_SIZE);
+                debug_assert!(current_tail >= base);
+                debug_assert!(current_tail < base + HEAP_VIRT_SIZE);
                 return current_tail;
             }
             // CAS tail failed, retry
@@ -117,6 +105,22 @@ impl AllocatorInner {
             debug!("allocate large {}", actual_size);
         }
         (actual_size, size_class_index)
+    }
+
+    fn swap_memory(&self, old_base: usize) {
+        let new_base = allocate_address_space();
+        if self
+            .base
+            .compare_and_swap(old_base, new_base as usize, Ordering::Relaxed)
+            != old_base
+        {
+            // CAS base address failed, give up and release allocated address space
+            // Other thread is also trying to allocate address space and succeeded
+            dealloc_address_space(new_base);
+        } else {
+            // update tail by store. This will fail all ongoing allocation and retry
+            self.tail.store(new_base as usize, Ordering::SeqCst);
+        }
     }
 }
 
