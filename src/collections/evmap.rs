@@ -42,15 +42,16 @@ impl<V: Clone> EvMap<V> {
 
     pub fn refresh(&self) {
         // get all items from producers and insert into the local map
-        self.source
-            .iter()
-            .for_each(|p| {
-                if let Some(items) = p.drop_out_all() {
-                    for (k, v) in items {
-                        self.map.insert(k, v);
-                    }
-                }
-            })
+        let items = {
+            self.source
+                .iter()
+                .filter_map(|p| p.drop_out_all())
+                .flatten()
+                .collect::<Vec<_>>()
+        };
+        for (k, v) in items {
+            self.map.insert(k, v);
+        }
     }
 
     #[inline]
