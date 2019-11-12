@@ -1,11 +1,11 @@
 // Heap for large objects exceeds maximum tier of pages
 // Use bump heap
 
-use crate::Ptr;
 use crate::utils::align_padding;
 use crate::utils::SYS_PAGE_SIZE;
 use crate::mmap_heap::MmapAllocator;
 use core::alloc::{Alloc, Layout};
+use crate::Ptr;
 
 pub unsafe fn allocate(size: usize) -> Ptr {
     let page_size = *SYS_PAGE_SIZE;

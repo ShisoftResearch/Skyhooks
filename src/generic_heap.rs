@@ -12,25 +12,33 @@ pub struct ObjectMeta {
     pub tid: usize,
 }
 
+#[cfg(not(feature = "bump_heap_only"))]
 pub unsafe fn malloc(size: Size) -> Ptr {
     let max_small_size = *small_heap::MAXIMUM_SIZE;
-    let res = if size > max_small_size {
+    if size > max_small_size {
         large_heap::allocate(size)
     } else {
         small_heap::allocate(size)
-    };
-    if res == null_mut() {
-        panic!();
     }
-    res
 }
 
+#[cfg(feature = "bump_heap_only")]
+pub unsafe fn malloc(size: Size) -> Ptr {
+    bump_heap::malloc(size)
+}
+
+#[cfg(not(feature = "bump_heap_only"))]
 pub unsafe fn free(ptr: Ptr) {
     if !small_heap::free(ptr) {
     } else if !large_heap::free(ptr) {
     } else {
         warn!("Cannot find object to free at {:x?}", ptr as usize);
     }
+}
+
+#[cfg(feature = "bump_heap_only")]
+pub unsafe fn free(ptr: Ptr) {
+    bump_heap::free(ptr);
 }
 
 pub unsafe fn realloc(ptr: Ptr, size: Size) -> Ptr {
@@ -59,7 +67,7 @@ pub unsafe fn realloc(ptr: Ptr, size: Size) -> Ptr {
     new_ptr
 }
 
-#[inline(always)]
+#[inline]
 pub fn size_class_index_from_size(size: usize) -> usize {
     debug_assert!(size > 0);
     let log = log_2_of(size);
@@ -70,7 +78,8 @@ pub fn size_class_index_from_size(size: usize) -> usize {
     }
 }
 
-#[inline(always)]
+
+#[inline]
 pub fn log_2_of(num: usize) -> usize {
     mem::size_of::<usize>() * 8 - num.leading_zeros() as usize - 1
 }

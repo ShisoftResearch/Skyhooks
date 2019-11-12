@@ -1,12 +1,13 @@
 use crate::bump_heap::BumpAllocator;
-use core::alloc::{GlobalAlloc, Layout, Alloc};
-use core::ptr::NonNull;
 use alloc::alloc::Global;
+use core::alloc::{Alloc, GlobalAlloc, Layout};
 use core::mem;
+use core::ptr::NonNull;
 use libc::{sysconf, _SC_PAGESIZE};
 use regex::Regex;
 use std::collections::HashMap;
 use std::fs::read_dir;
+use crate::{Ptr, Size};
 
 lazy_static! {
     pub static ref SYS_PAGE_SIZE: usize = unsafe { sysconf(_SC_PAGESIZE) as usize };
@@ -112,7 +113,7 @@ pub fn is_power_of_2(x: usize) -> bool {
     (x & (x - 1)) == 0
 }
 
-#[inline(always)]
+#[inline]
 pub fn alloc_mem<T, A: Alloc + Default>(size: usize) -> usize {
     let mut a = A::default();
     let align = mem::align_of::<T>();
@@ -121,12 +122,20 @@ pub fn alloc_mem<T, A: Alloc + Default>(size: usize) -> usize {
     unsafe { a.alloc_zeroed(layout) }.unwrap().as_ptr() as usize
 }
 
-#[inline(always)]
+#[inline]
 pub fn dealloc_mem<T, A: Alloc + Default>(ptr: usize, size: usize) {
     let mut a = A::default();
     let align = mem::align_of::<T>();
     let layout = Layout::from_size_align(size, align).unwrap();
     unsafe { a.dealloc(NonNull::<u8>::new(ptr as *mut u8).unwrap(), layout) }
+}
+
+#[inline(always)]
+pub fn debug_validate(ptr: Ptr, size: Size) -> Ptr {
+    unsafe {
+        debug!("Validated address: {:x}", libc::memset(ptr, 0, size) as usize);
+        ptr
+    }
 }
 
 #[cfg(test)]

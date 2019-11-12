@@ -1,7 +1,7 @@
 use super::*;
 use core::ptr;
-use libc::*;
 use errno::errno;
+use libc::*;
 
 const MADV_NOHUGEPAGE: c_int = 14;
 
@@ -31,7 +31,7 @@ pub fn munmap_memory(address: Ptr, size: usize) {
 }
 
 #[cfg(target_os = "linux")]
-#[inline(always)]
+#[inline]
 pub fn no_huge_page(ptr: Ptr, size: usize) {
     unsafe {
         madvise(ptr, size, MADV_NOHUGEPAGE);
@@ -39,7 +39,7 @@ pub fn no_huge_page(ptr: Ptr, size: usize) {
 }
 
 #[cfg(not(target_os = "linux"))]
-#[inline(always)]
+#[inline]
 pub fn no_huge_page(ptr: Ptr, size: usize) {}
 
 pub fn dealloc_regional(addr: Ptr, size: usize) -> usize {

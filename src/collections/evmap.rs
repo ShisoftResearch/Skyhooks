@@ -64,22 +64,22 @@ impl<V: Clone, A: Alloc + Default> EvMap<V, A> {
         }
     }
 
-    #[inline(always)]
+    #[inline]
     pub fn insert(&self, key: usize, value: V) -> Option<()> {
         self.map.insert(key, value)
     }
 
-    #[inline(always)]
+    #[inline]
     pub fn get(&self, key: usize) -> Option<V> {
         self.map.get(key)
     }
 
-    #[inline(always)]
+    #[inline]
     pub fn remove(&self, key: usize) -> Option<V> {
         self.map.remove(key)
     }
 
-    #[inline(always)]
+    #[inline]
     pub fn contains(&self, key: usize) -> bool {
         self.map.contains(key)
     }
