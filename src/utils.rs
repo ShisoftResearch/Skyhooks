@@ -173,6 +173,6 @@ mod test {
 
     #[bench]
     fn baseline(b: &mut Bencher) {
-        b.iter(|| { 1 + 1; });
+        b.iter(|| { let _: (usize, usize, usize, usize) = (1, 2, 3, 4).clone(); });
     }
 }
