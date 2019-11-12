@@ -7,6 +7,7 @@ use libc::{sysconf, _SC_PAGESIZE};
 use regex::Regex;
 use std::collections::HashMap;
 use std::fs::read_dir;
+use crate::{Ptr, Size};
 
 lazy_static! {
     pub static ref SYS_PAGE_SIZE: usize = unsafe { sysconf(_SC_PAGESIZE) as usize };
@@ -127,6 +128,14 @@ pub fn dealloc_mem<T, A: Alloc + Default>(ptr: usize, size: usize) {
     let align = mem::align_of::<T>();
     let layout = Layout::from_size_align(size, align).unwrap();
     unsafe { a.dealloc(NonNull::<u8>::new(ptr as *mut u8).unwrap(), layout) }
+}
+
+#[inline(always)]
+pub fn debug_validate(ptr: Ptr, size: Size) -> Ptr {
+    unsafe {
+        debug!("Validated address: {:x}", libc::memset(ptr, 0, size) as usize);
+        ptr
+    }
 }
 
 #[cfg(test)]

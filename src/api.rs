@@ -1,5 +1,5 @@
 use crate::mmap_heap::*;
-use crate::utils::align_padding;
+use crate::utils::{align_padding, debug_validate};
 use crate::{bump_heap, generic_heap, Ptr, Size, NULL_PTR};
 use core::alloc::{GlobalAlloc, Layout};
 use core::cell::Cell;
@@ -66,12 +66,6 @@ pub unsafe fn nu_realloc(ptr: Ptr, size: Size) -> Ptr {
         }
     });
     debug_validate(ptr, size)
-}
-
-#[inline(always)]
-unsafe fn debug_validate(ptr: Ptr, size: Size) -> Ptr {
-    debug!("Validated address: {:x}", memset(ptr, 0, size) as usize);
-    ptr
 }
 
 // Allocator for rust itself for internal heaps

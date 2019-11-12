@@ -85,6 +85,7 @@ impl AllocatorInner {
                 debug_assert!(current_tail > 0);
                 debug_assert!(current_tail >= base);
                 debug_assert!(current_tail < base + HEAP_VIRT_SIZE);
+                debug_validate(current_tail as Ptr, size);
                 return current_tail;
             }
             // CAS tail failed, retry
@@ -136,6 +137,7 @@ unsafe impl GlobalAlloc for AllocatorInner {
         let align_padding = align_padding(origin_addr, align);
         let final_addr = origin_addr + align_padding;
         self.address_map.insert(final_addr, origin_addr);
+        debug_validate(final_addr as Ptr, actual_size);
         return final_addr as *mut u8;
     }
 
@@ -145,8 +147,7 @@ unsafe impl GlobalAlloc for AllocatorInner {
         if let Some(actual_addr) = self.address_map.remove(addr) {
             let size_class_index = size_class_index_from_size(actual_size);
             if size_class_index < self.sizes.len() {
-                // libc::mprotect(actual_addr as Ptr, actual_size, PROT_READ | PROT_WRITE);
-                // libc::memset(actual_addr as Ptr, 0, actual_size);
+                debug_validate(ptr as Ptr, actual_size);
                 self.sizes[size_class_index].free_list.push(actual_addr);
             }
             if actual_size > *SYS_PAGE_SIZE {
