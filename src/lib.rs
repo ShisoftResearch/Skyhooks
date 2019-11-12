@@ -4,6 +4,7 @@
 #![feature(alloc_error_handler)]
 #![feature(core_intrinsics)]
 #![feature(allocator_api)]
+#![feature(test)]
 
 extern crate alloc;
 #[macro_use]
@@ -11,6 +12,7 @@ extern crate lazy_static;
 #[macro_use]
 extern crate log;
 extern crate libc;
+extern crate test;
 
 pub mod api;
 mod bump_heap;

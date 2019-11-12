@@ -13,6 +13,7 @@ lazy_static! {
     pub static ref SYS_PAGE_SIZE: usize = unsafe { sysconf(_SC_PAGESIZE) as usize };
     pub static ref SYS_CPU_NODE: HashMap<usize, usize> = cpu_topology();
     pub static ref NUM_NUMA_NODES: usize = num_numa_nodes();
+    pub static ref NUM_CPU: usize = SYS_CPU_NODE.len();
     pub static ref SYS_TOTAL_MEM: usize = total_memory();
 }
 
@@ -81,8 +82,18 @@ pub fn total_memory() -> usize {
 }
 
 #[cfg(target_os = "linux")]
+pub fn current_cpu() -> usize {
+    unsafe { (libc::sched_getcpu() as usize) }
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn current_cpu() -> usize {
+    0
+}
+
+#[cfg(target_os = "linux")]
 pub fn current_numa() -> usize {
-    let cpu = unsafe { (libc::sched_getcpu() as usize) };
+    let cpu = current_cpu();
     SYS_CPU_NODE.get(&cpu).map(|x| *x).unwrap_or(0)
 }
 
@@ -140,18 +151,28 @@ pub fn debug_validate(ptr: Ptr, size: Size) -> Ptr {
 
 #[cfg(test)]
 mod test {
-    use super::*;
+    use test::Bencher;
 
     #[test]
     fn numa_nodes() {
-        for (cpu, node) in SYS_CPU_NODE.iter() {
+        for (cpu, node) in super::SYS_CPU_NODE.iter() {
             // println!("{} in {}", cpu, node);
         }
     }
 
     #[test]
     fn numa() {
-        let numa = current_numa();
+        let numa = super::current_numa();
         println!("current numa {}", numa);
+    }
+
+    #[bench]
+    fn get_cpu(b: &mut Bencher) {
+        b.iter(|| { super::current_cpu(); });
+    }
+
+    #[bench]
+    fn baseline(b: &mut Bencher) {
+        b.iter(|| { 1 + 1; });
     }
 }

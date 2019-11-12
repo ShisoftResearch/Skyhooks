@@ -37,7 +37,7 @@ lazy_static! {
 
 struct ThreadMeta {
     sizes: TSizeClasses,
-    objects: Arc<Producer<Object>>,
+    objects: Producer<Object>,
     numa: usize,
     tid: usize,
 }
@@ -214,7 +214,6 @@ impl Drop for ThreadMeta {
             is_inner.set(true);
             let numa_id = self.numa;
             let numa = &PER_NODE_META[numa_id];
-            numa.objects.remove_producer(&self.objects);
             numa.thread_free.remove(self.tid);
             for (i, size_class) in self.sizes.into_iter().enumerate() {
                 let common = &numa.common[i];
