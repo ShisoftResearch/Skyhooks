@@ -8,7 +8,7 @@
 // memory space immediately. It is very unsafe.
 
 use crate::collections::lflist;
-use crate::generic_heap::{size_class_index_from_size, NUM_SIZE_CLASS};
+use crate::generic_heap::{size_class_index_from_size};
 use crate::mmap::{dealloc_regional, mmap_without_fd, munmap_memory};
 use crate::mmap_heap::*;
 use crate::utils::*;
@@ -21,7 +21,9 @@ use lfmap::Map;
 use std::mem::MaybeUninit;
 use libc::*;
 
-type SizeClasses = [SizeClass; NUM_SIZE_CLASS];
+const BUMP_SIZE_CLASS: usize = 32;
+
+type SizeClasses = [SizeClass; BUMP_SIZE_CLASS];
 
 lazy_static! {
     static ref ALLOC_INNER: AllocatorInner = AllocatorInner::new();
@@ -149,7 +151,8 @@ unsafe impl GlobalAlloc for AllocatorInner {
             if size_class_index < self.sizes.len() {
                 debug_validate(ptr as Ptr, actual_size);
                 self.sizes[size_class_index].free_list.push(actual_addr);
-            } else if actual_size > *SYS_PAGE_SIZE {
+            } else {
+                // this may be a problem
                 dealloc_regional(actual_addr as Ptr, actual_size);
             }
         }
@@ -210,7 +213,7 @@ pub unsafe fn free(ptr: Ptr) -> bool {
 }
 
 fn size_classes() -> SizeClasses {
-    let mut data: [MaybeUninit<SizeClass>; NUM_SIZE_CLASS] =
+    let mut data: [MaybeUninit<SizeClass>; BUMP_SIZE_CLASS] =
         unsafe { MaybeUninit::uninit().assume_init() };
     let mut size = 2;
     for elem in &mut data[..] {
@@ -227,7 +230,7 @@ pub fn size_of(ptr: Ptr) -> Option<usize> {
 
 #[inline]
 fn maximum_free_list_covered_size() -> usize {
-    size_classes()[NUM_SIZE_CLASS - 1].size
+    size_classes()[BUMP_SIZE_CLASS - 1].size
 }
 
 #[inline]
