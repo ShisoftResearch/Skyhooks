@@ -18,8 +18,8 @@ use core::sync::atomic::Ordering::Relaxed;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use core::{mem, ptr};
 use lfmap::Map;
-use libc::memcpy;
 use std::mem::MaybeUninit;
+use libc::*;
 
 type SizeClasses = [SizeClass; NUM_SIZE_CLASS];
 
@@ -145,7 +145,8 @@ unsafe impl GlobalAlloc for AllocatorInner {
         if let Some(actual_addr) = self.address_map.remove(addr) {
             let size_class_index = size_class_index_from_size(actual_size);
             if size_class_index < self.sizes.len() {
-                libc::memset(actual_addr as Ptr, 0, actual_size);
+                // libc::mprotect(actual_addr as Ptr, actual_size, PROT_READ | PROT_WRITE);
+                // libc::memset(actual_addr as Ptr, 0, actual_size);
                 self.sizes[size_class_index].free_list.push(actual_addr);
             }
             if actual_size > *SYS_PAGE_SIZE {

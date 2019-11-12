@@ -19,7 +19,7 @@ pub unsafe fn nu_malloc(size: Size) -> Ptr {
     if size == 0 {
         return null_mut();
     } // The C standard (C17 7.22.3/1)
-    INNER_CALL.with(|is_inner| {
+    let ptr = INNER_CALL.with(|is_inner| {
         if !is_inner.get() {
             is_inner.set(true);
             crate::small_heap::warm_up();
@@ -29,7 +29,8 @@ pub unsafe fn nu_malloc(size: Size) -> Ptr {
         } else {
             bump_heap::malloc(size)
         }
-    })
+    });
+    debug_validate(ptr, size)
 }
 pub unsafe fn nu_free(ptr: Ptr) {
     if ptr == null_mut() {
@@ -50,14 +51,11 @@ pub unsafe fn nu_free(ptr: Ptr) {
 pub unsafe fn nu_calloc(nmemb: Size, size: Size) -> Ptr {
     let total_size = nmemb * size;
     let ptr = nu_malloc(total_size);
-    if ptr != null_mut() {
-        memset(ptr, 0, total_size);
-    }
-    ptr
+    debug_validate(ptr, total_size)
 }
 
 pub unsafe fn nu_realloc(ptr: Ptr, size: Size) -> Ptr {
-    INNER_CALL.with(|is_inner| {
+    let ptr = INNER_CALL.with(|is_inner| {
         if !is_inner.get() {
             is_inner.set(true);
             let res = generic_heap::realloc(ptr, size);
@@ -66,7 +64,14 @@ pub unsafe fn nu_realloc(ptr: Ptr, size: Size) -> Ptr {
         } else {
             bump_heap::realloc(ptr, size)
         }
-    })
+    });
+    debug_validate(ptr, size)
+}
+
+#[inline(always)]
+unsafe fn debug_validate(ptr: Ptr, size: Size) -> Ptr {
+    debug!("Validated address: {:x}", memset(ptr, 0, size) as usize);
+    ptr
 }
 
 // Allocator for rust itself for internal heaps
