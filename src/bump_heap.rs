@@ -42,7 +42,7 @@ struct SizeClass {
     free_list: lflist::List<usize, MmapAllocator>,
 }
 
-pub const HEAP_VIRT_SIZE: usize = 64 * 1024 * 1024; // 64MB
+pub const HEAP_VIRT_SIZE: usize = 128 * 1024 * 1024; // 64MB
 
 fn allocate_address_space() -> Ptr {
     mmap_without_fd(HEAP_VIRT_SIZE)
