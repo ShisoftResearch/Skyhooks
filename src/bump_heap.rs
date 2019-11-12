@@ -149,8 +149,7 @@ unsafe impl GlobalAlloc for AllocatorInner {
             if size_class_index < self.sizes.len() {
                 debug_validate(ptr as Ptr, actual_size);
                 self.sizes[size_class_index].free_list.push(actual_addr);
-            }
-            if actual_size > *SYS_PAGE_SIZE {
+            } else if actual_size > *SYS_PAGE_SIZE {
                 dealloc_regional(actual_addr as Ptr, actual_size);
             }
         }
