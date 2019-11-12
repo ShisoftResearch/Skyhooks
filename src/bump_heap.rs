@@ -153,7 +153,7 @@ unsafe impl GlobalAlloc for AllocatorInner {
                 // self.sizes[size_class_index].free_list.push(actual_addr);
             } else {
                 // this may be a problem
-                dealloc_regional(actual_addr as Ptr, actual_size);
+                // dealloc_regional(actual_addr as Ptr, actual_size);
             }
         }
     }

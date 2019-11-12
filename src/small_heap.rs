@@ -22,31 +22,27 @@ type TSizeClasses = [SizeClass; NUM_SIZE_CLASS];
 type TCommonSizeClasses = [CommonSizeClass; NUM_SIZE_CLASS];
 type TThreadFreeLists = [SharedFreeList; NUM_SIZE_CLASS];
 
-thread_local! {
-    static THREAD_META: ThreadMeta = ThreadMeta::new()
-}
-
 lazy_static! {
     static ref TOTAL_HEAP_SIZE: usize = total_heap();
     static ref HEAP_BASE: usize = mmap_without_fd(*TOTAL_HEAP_SIZE) as usize;
     static ref HEAP_UPPER_BOUND: usize = *HEAP_BASE + *TOTAL_HEAP_SIZE;
     static ref PER_NODE_META: Vec<NodeMeta> = gen_numa_node_list();
     static ref NODE_SHIFT_BITS: usize = node_shift_bits();
+    static ref PER_CPU_META: Vec<CoreMeta> = gen_cpu_list();
     pub static ref MAXIMUM_SIZE: usize = maximum_size();
 }
 
-struct ThreadMeta {
+struct CoreMeta {
+    id: usize,
     sizes: TSizeClasses,
     objects: Producer<Object>,
     numa: usize,
-    tid: usize,
 }
 
 struct NodeMeta {
     alloc_pos: AtomicUsize,
     common: TCommonSizeClasses,
     pending_free: Option<RemoteNodeFree>,
-    thread_free: lfmap::ObjectMap<TThreadFreeLists>,
     objects: evmap::EvMap<Object>,
 }
 
@@ -69,6 +65,10 @@ struct ReservedPage {
     pos: RefCell<usize>,
 }
 
+// We don't care about their thread safety for there is only one CPU can work on those
+unsafe impl Send for ReservedPage {}
+unsafe impl Sync for ReservedPage {}
+
 struct RemoteNodeFree {
     pending_free: Arc<lflist::List<usize, BumpAllocator>>,
     // sentinel_thread: thread::Thread,
@@ -76,40 +76,40 @@ struct RemoteNodeFree {
 
 #[derive(Clone)]
 struct Object {
-    tid: usize,
+    cpu: usize,
     tier: usize,
 }
 
 pub fn allocate(size: usize) -> Ptr {
     let size_class_index = size_class_index_from_size(size);
     debug_assert!(size <= *MAXIMUM_SIZE);
-    THREAD_META.with(|meta| {
-        let size_class = &meta.sizes[size_class_index];
-        // allocate memory inside the thread meta
-        let addr = if let Some(freed) = size_class.free_list.pop() {
-            // first, looking in the free list
+    let cpu_id = current_cpu();
+    let meta = &PER_CPU_META[cpu_id];
+    let size_class = &meta.sizes[size_class_index];
+    // allocate memory inside the thread meta
+    let addr = if let Some(freed) = size_class.free_list.pop() {
+        // first, looking in the free list
+        freed
+    } else if let Some(reserved) = size_class.reserved.take(size_class.size) {
+        // next, ask the reservation station for objects
+        reserved
+    } else {
+        let node = &PER_NODE_META[meta.numa];
+        // allocate from node common list
+        if let Some(freed) = node.common[size_class_index].free_list.pop() {
             freed
-        } else if let Some(reserved) = size_class.reserved.take(size_class.size) {
-            // next, ask the reservation station for objects
-            reserved
         } else {
-            let node = &PER_NODE_META[meta.numa];
-            // allocate from node common list
-            if let Some(freed) = node.common[size_class_index].free_list.pop() {
-                freed
-            } else {
-                // finally, allocate from node memory space in the reservation station
-                size_class
-                    .reserved
-                    .allocate_from_common(size_class.size, size_class_index, &node)
-            }
-        };
-        meta.objects.insert(
-            addr,
-            meta.object_map(size_class_index),
-        );
-        return addr as Ptr;
-    })
+            // finally, allocate from node memory space in the reservation station
+            size_class
+                .reserved
+                .allocate_from_common(size_class.size, size_class_index, &node)
+        }
+    };
+    meta.objects.insert(
+        addr,
+        meta.object_map(size_class_index),
+    );
+    return addr as Ptr;
 }
 pub fn contains(ptr: Ptr) -> bool {
     let addr = ptr as usize;
@@ -128,38 +128,35 @@ pub fn free(ptr: Ptr) -> bool {
     }
     let node_id = addr_numa_id(addr);
     let node = &PER_NODE_META[node_id];
-    THREAD_META.with(|meta| {
-        let current_node = meta.numa;
-        node.objects.refresh();
-        if let Some(pending_free) = &PER_NODE_META[current_node].pending_free {
-            pending_free.free_all();
+    let cpu_id = current_cpu();
+    let meta = &PER_CPU_META[cpu_id];
+    let current_node = meta.numa;
+    node.objects.refresh();
+    if let Some(pending_free) = &PER_NODE_META[current_node].pending_free {
+        pending_free.free_all();
+    }
+    if node_id != current_node {
+        // append address to remote node if this address does not belong to current node
+        let contains_obj = node.objects.contains(addr);
+        if contains_obj {
+            node.pending_free.as_ref().unwrap().push(addr);
         }
-        if node_id != current_node {
-            // append address to remote node if this address does not belong to current node
-            let contains_obj = node.objects.contains(addr);
-            if contains_obj {
-                node.pending_free.as_ref().unwrap().push(addr);
-            }
-            return contains_obj;
-        } else {
-            if let Some(obj_meta) = node.objects.get(ptr as usize) {
-                let tier = obj_meta.tier;
-                if obj_meta.tid == meta.tid {
-                    // object from this thread, insert into this free-list
-                    meta.sizes[tier].free_list.push(ptr as usize);
-                } else if let Some(thread_free_list) = node.thread_free.get(obj_meta.tid) {
-                    // found belong thread, insert into the thread free list
-                    thread_free_list[tier].push(ptr as usize);
-                } else {
-                    // cannot find the belong thread, insert into self free list
-                    meta.sizes[tier].free_list.push(ptr as usize);
-                }
-                return true;
+        return contains_obj;
+    } else {
+        if let Some(obj_meta) = node.objects.get(ptr as usize) {
+            let tier = obj_meta.tier;
+            if obj_meta.cpu == meta.id {
+                // object from this thread, insert into this free-list
+                meta.sizes[tier].free_list.push(ptr as usize);
             } else {
-                return false;
+                // found belong thread, insert into the thread free list
+                &PER_CPU_META[obj_meta.cpu].sizes[tier].free_list.push(ptr as usize);
             }
+            return true;
+        } else {
+            return false;
         }
-    })
+    }
 }
 pub fn size_of(ptr: Ptr) -> Option<usize> {
     let addr = ptr as usize;
@@ -168,11 +165,11 @@ pub fn size_of(ptr: Ptr) -> Option<usize> {
     }
     let node_id = addr_numa_id(addr);
     let node_meta = &PER_NODE_META[node_id];
+    let cpu_id = current_cpu();
+    let meta = &PER_CPU_META[cpu_id];
     node_meta.objects.refresh();
     node_meta.objects.get(addr).map(|o| {
-        THREAD_META.with(|meta| {
-            meta.sizes[o.tier].size
-        })
+        meta.sizes[o.tier].size
     })
 }
 
@@ -181,53 +178,25 @@ pub fn address_in_range(addr: usize) -> bool {
     addr >= *HEAP_BASE && addr < *HEAP_UPPER_BOUND
 }
 
-impl ThreadMeta {
-    pub fn new() -> Self {
+impl CoreMeta {
+    pub fn new(cpu_id: usize) -> Self {
         let numa_id = current_numa();
         let numa = &PER_NODE_META[numa_id];
         let objects = numa.objects.new_producer();
         let size_classes = size_classes();
-        let thread_free_lists = thread_free_lists(&size_classes);
-        let tid = current_thread_id();
-        numa.thread_free.insert(tid, thread_free_lists);
         Self {
-            numa: numa_id,
+            id: cpu_id,
+            numa: SYS_CPU_NODE[&cpu_id],
             objects,
             sizes: size_classes,
-            tid,
         }
     }
 
     pub fn object_map(&self, tier: usize) -> Object{
         Object {
             tier,
-            tid: self.tid,
+            cpu: self.id,
         }
-    }
-}
-
-// Return thread resource to global
-impl Drop for ThreadMeta {
-    fn drop(&mut self) {
-        let page_size = *SYS_PAGE_SIZE;
-        api::INNER_CALL.with(|is_inner| {
-            is_inner.set(true);
-            let numa_id = self.numa;
-            let numa = &PER_NODE_META[numa_id];
-            numa.thread_free.remove(self.tid);
-            for (i, size_class) in self.sizes.into_iter().enumerate() {
-                let common = &numa.common[i];
-                let reserved = &size_class.reserved;
-                let reserved_addr = *reserved.addr.borrow();
-                let reserved_pos = *reserved.pos.borrow();
-                if reserved_addr > 0 && reserved_pos < reserved_addr + page_size {
-                    common.reserved.push(reserved.clone());
-                }
-                if size_class.free_list.count() > 0 {
-                    common.free_list.prepend_with(&size_class.free_list);
-                }
-            }
-        });
     }
 }
 
@@ -338,7 +307,6 @@ fn gen_numa_node_list() -> Vec<NodeMeta> {
             alloc_pos: AtomicUsize::new(node_base),
             common: common_size_classes(),
             pending_free: remote_free,
-            thread_free: ObjectMap::with_capacity(128),
             objects: evmap::EvMap::new(),
         });
     }
@@ -416,6 +384,10 @@ fn node_shift_bits() -> usize {
 #[inline]
 fn maximum_size() -> usize {
     size_classes()[NUM_SIZE_CLASS - 1].size
+}
+
+fn gen_cpu_list() -> Vec<CoreMeta> {
+    (0..*NUM_CPU).map(|cpu_id| CoreMeta::new(cpu_id)).collect()
 }
 
 #[cfg(test)]
