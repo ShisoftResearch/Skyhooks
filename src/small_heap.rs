@@ -1,6 +1,6 @@
 use super::*;
 use crate::collections::fixvec::FixedVec;
-use crate::collections::lflist;
+use crate::collections::{lflist, evmap};
 use crate::generic_heap::{ObjectMeta, NUM_SIZE_CLASS, size_class_index_from_size, log_2_of};
 use crate::mmap::mmap_without_fd;
 use crate::utils::*;
@@ -15,6 +15,7 @@ use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;
 use std::thread;
 use std::clone::Clone;
+use crate::collections::evmap::Producer;
 
 type SharedFreeList = Arc<lflist::List<usize, BumpAllocator>>;
 type TSizeClasses = [SizeClass; NUM_SIZE_CLASS];
@@ -36,6 +37,7 @@ lazy_static! {
 
 struct ThreadMeta {
     sizes: TSizeClasses,
+    objects: Arc<Producer<Object>>,
     numa: usize,
     tid: usize,
 }
@@ -44,8 +46,8 @@ struct NodeMeta {
     alloc_pos: AtomicUsize,
     common: TCommonSizeClasses,
     pending_free: Option<RemoteNodeFree>,
-    thread_free: lfmap::ObjectMap<TThreadFreeLists, BumpAllocator>,
-    objects: lfmap::ObjectMap<Object, BumpAllocator>,
+    thread_free: lfmap::ObjectMap<TThreadFreeLists>,
+    objects: evmap::EvMap<Object>,
 }
 
 struct SizeClass {
@@ -83,7 +85,6 @@ pub fn allocate(size: usize) -> Ptr {
     debug_assert!(size <= *MAXIMUM_SIZE);
     THREAD_META.with(|meta| {
         let size_class = &meta.sizes[size_class_index];
-        let node = &PER_NODE_META[meta.numa];
         // allocate memory inside the thread meta
         let addr = if let Some(freed) = size_class.free_list.pop() {
             // first, looking in the free list
@@ -92,6 +93,7 @@ pub fn allocate(size: usize) -> Ptr {
             // next, ask the reservation station for objects
             reserved
         } else {
+            let node = &PER_NODE_META[meta.numa];
             // allocate from node common list
             if let Some(freed) = node.common[size_class_index].free_list.pop() {
                 freed
@@ -102,8 +104,10 @@ pub fn allocate(size: usize) -> Ptr {
                     .allocate_from_common(size_class.size, size_class_index, &node)
             }
         };
-        node.objects
-            .insert(addr, meta.object_map(size_class_index));
+        meta.objects.insert(
+            addr,
+            meta.object_map(size_class_index),
+        );
         return addr as Ptr;
     })
 }
@@ -114,6 +118,7 @@ pub fn contains(ptr: Ptr) -> bool {
     }
     let node_id = addr_numa_id(addr);
     let node = &PER_NODE_META[node_id];
+    node.objects.refresh();
     node.objects.contains(addr)
 }
 pub fn free(ptr: Ptr) -> bool {
@@ -125,6 +130,7 @@ pub fn free(ptr: Ptr) -> bool {
     let node = &PER_NODE_META[node_id];
     THREAD_META.with(|meta| {
         let current_node = meta.numa;
+        node.objects.refresh();
         if let Some(pending_free) = &PER_NODE_META[current_node].pending_free {
             pending_free.free_all();
         }
@@ -162,10 +168,12 @@ pub fn size_of(ptr: Ptr) -> Option<usize> {
     }
     let node_id = addr_numa_id(addr);
     let node_meta = &PER_NODE_META[node_id];
-    node_meta
-        .objects
-        .get(addr)
-        .map(|o| THREAD_META.with(|meta| meta.sizes[o.tier].size))
+    node_meta.objects.refresh();
+    node_meta.objects.get(addr).map(|o| {
+        THREAD_META.with(|meta| {
+            meta.sizes[o.tier].size
+        })
+    })
 }
 
 #[inline]
@@ -177,12 +185,14 @@ impl ThreadMeta {
     pub fn new() -> Self {
         let numa_id = current_numa();
         let numa = &PER_NODE_META[numa_id];
+        let objects = numa.objects.new_producer();
         let size_classes = size_classes();
         let thread_free_lists = thread_free_lists(&size_classes);
         let tid = current_thread_id();
         numa.thread_free.insert(tid, thread_free_lists);
         Self {
             numa: numa_id,
+            objects,
             sizes: size_classes,
             tid,
         }
@@ -204,6 +214,7 @@ impl Drop for ThreadMeta {
             is_inner.set(true);
             let numa_id = self.numa;
             let numa = &PER_NODE_META[numa_id];
+            numa.objects.remove_producer(&self.objects);
             numa.thread_free.remove(self.tid);
             for (i, size_class) in self.sizes.into_iter().enumerate() {
                 let common = &numa.common[i];
@@ -329,7 +340,7 @@ fn gen_numa_node_list() -> Vec<NodeMeta> {
             common: common_size_classes(),
             pending_free: remote_free,
             thread_free: ObjectMap::with_capacity(128),
-            objects: lfmap::ObjectMap::with_capacity(1024),
+            objects: evmap::EvMap::new(),
         });
     }
     return nodes;
