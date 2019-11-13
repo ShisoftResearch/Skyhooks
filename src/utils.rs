@@ -94,7 +94,12 @@ pub fn current_cpu() -> usize {
 #[cfg(target_os = "linux")]
 pub fn current_numa() -> usize {
     let cpu = current_cpu();
-    SYS_CPU_NODE.get(&cpu).map(|x| *x).unwrap_or(0)
+    numa_from_cpu_id(cpu)
+}
+
+#[cfg(target_os = "linux")]
+pub fn numa_from_cpu_id(cpu_id: usize) -> usize {
+    SYS_CPU_NODE.get(&cpu_id).map(|x| *x).unwrap_or(0)
 }
 
 #[cfg(not(target_os = "linux"))]
