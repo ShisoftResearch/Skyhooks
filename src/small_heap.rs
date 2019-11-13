@@ -41,6 +41,7 @@ struct ThreadMeta {
     objects: Producer<Object>,
     numa: usize,
     tid: usize,
+    cpu: usize,
 }
 
 struct NodeMeta {
@@ -88,7 +89,7 @@ pub fn allocate(size: usize) -> Ptr {
     debug_assert!(size <= *MAXIMUM_SIZE);
     THREAD_META.with(|meta| {
         let size_class = &meta.sizes[size_class_index];
-        let cpu_id = current_cpu();
+        let cpu_id = meta.cpu;
         let cpu_meta = &PER_CPU_META[cpu_id];
         // allocate memory inside the thread meta
         let addr = if let Some(freed) = cpu_meta.free_lists[size_class_index].pop() {
@@ -149,7 +150,7 @@ pub fn free(ptr: Ptr) -> bool {
         } else {
             if let Some(obj_meta) = node.objects.get(ptr as usize) {
                 let tier = obj_meta.tier;
-                let cpu_id = current_cpu();
+                let cpu_id = meta.cpu;
                 let cpu_meta = &PER_CPU_META[cpu_id];
                 &PER_CPU_META[obj_meta.cpu].free_lists[tier].push(ptr as usize);
                 return true;
@@ -190,6 +191,7 @@ impl ThreadMeta {
         Self {
             numa: numa_id,
             sizes: size_classes,
+            cpu: cpu_id,
             objects,
             tid,
         }
