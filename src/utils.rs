@@ -88,7 +88,7 @@ pub fn current_cpu() -> usize {
 
 #[cfg(not(target_os = "linux"))]
 pub fn current_cpu() -> usize {
-    0
+    current_thread_id() % *NUM_CPU
 }
 
 #[cfg(target_os = "linux")]
