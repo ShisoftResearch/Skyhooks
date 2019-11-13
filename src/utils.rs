@@ -157,6 +157,8 @@ pub fn debug_validate(ptr: Ptr, size: Size) -> Ptr {
 #[cfg(test)]
 mod test {
     use test::Bencher;
+    use std::sync::atomic::Ordering::Relaxed;
+    use std::sync::atomic::AtomicUsize;
 
     #[test]
     fn numa_nodes() {
@@ -179,5 +181,30 @@ mod test {
     #[bench]
     fn baseline(b: &mut Bencher) {
         b.iter(|| { let _: (usize, usize, usize, usize) = (1, 2, 3, 4).clone(); });
+    }
+
+    #[bench]
+    fn atomic_lock(b: &mut Bencher) {
+        let atomic = AtomicUsize::new(0);
+        b.iter(|| { atomic.fetch_add(1, Relaxed); });
+    }
+
+    #[bench]
+    fn atomic_cas(b: &mut Bencher) {
+        let atomic = AtomicUsize::new(0);
+        b.iter(|| { atomic.compare_and_swap(0, 1, Relaxed); });
+    }
+
+    #[bench]
+    fn atomic_load(b: &mut Bencher) {
+        let atomic = AtomicUsize::new(100);
+        let mut res = 0;
+        b.iter(|| { res = atomic.load(Relaxed); });
+    }
+
+    #[bench]
+    fn atomic_store(b: &mut Bencher) {
+        let atomic = AtomicUsize::new(100);
+        b.iter(|| { atomic.store(1, Relaxed); });
     }
 }
