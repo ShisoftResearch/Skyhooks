@@ -110,9 +110,10 @@ pub fn allocate(size: usize) -> Ptr {
                     .allocate_from_common(size_class.size, size_class_index, &node)
             }
         };
-        meta.objects.insert(
+        meta.objects.insert_to_cpu(
             addr,
             meta.object_map(size_class_index, cpu_id),
+            meta.cpu
         );
         return addr as Ptr;
     })

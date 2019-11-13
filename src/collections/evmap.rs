@@ -79,7 +79,11 @@ impl<V> Producer<V> {
     #[inline]
     pub fn insert(&self, key: usize, value: V) {
         // current_cpu is cheap in Linux: 16 ns/iter (+/- 1)
-        // Have to get current cpu in real-time or the affinity won't work
-        self.cache[current_cpu()].exclusive_push((key, value));
+        // Have to get current cpu in real-time or the may affinity won't work
+        self.insert_to_cpu(key, value, current_cpu());
+    }
+    #[inline]
+    pub fn insert_to_cpu(&self, key: usize, value: V, cpu_id: usize) {
+        self.cache[cpu_id].exclusive_push((key, value));
     }
 }
