@@ -1,8 +1,8 @@
 use super::*;
-use libc::*;
-use std::ptr::null_mut;
 use crate::utils::is_power_of_2;
 use core::mem;
+use libc::*;
+use std::ptr::null_mut;
 
 pub const NUM_SIZE_CLASS: usize = 16;
 
@@ -77,7 +77,6 @@ pub fn size_class_index_from_size(size: usize) -> usize {
         log
     }
 }
-
 
 #[inline]
 pub fn log_2_of(num: usize) -> usize {

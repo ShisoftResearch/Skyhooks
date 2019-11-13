@@ -1,7 +1,8 @@
 use super::*;
+use crate::collections::evmap::Producer;
 use crate::collections::fixvec::FixedVec;
-use crate::collections::{lflist, evmap};
-use crate::generic_heap::{ObjectMeta, NUM_SIZE_CLASS, size_class_index_from_size, log_2_of};
+use crate::collections::{evmap, lflist};
+use crate::generic_heap::{log_2_of, size_class_index_from_size, ObjectMeta, NUM_SIZE_CLASS};
 use crate::mmap::mmap_without_fd;
 use crate::utils::*;
 use core::mem;
@@ -9,13 +10,12 @@ use core::mem::MaybeUninit;
 use core::sync::atomic::AtomicUsize;
 use crossbeam_queue::SegQueue;
 use lfmap::{Map, ObjectMap};
-use std::cell::{RefCell, Cell};
+use std::cell::{Cell, RefCell};
+use std::clone::Clone;
 use std::os::unix::thread::JoinHandleExt;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;
 use std::thread;
-use std::clone::Clone;
-use crate::collections::evmap::Producer;
 
 type SharedFreeList = lflist::List<usize, BumpAllocator>;
 type TSizeClasses = [SizeClass; NUM_SIZE_CLASS];
@@ -110,11 +110,8 @@ pub fn allocate(size: usize) -> Ptr {
                     .allocate_from_common(size_class.size, size_class_index, &node)
             }
         };
-        meta.objects.insert_to_cpu(
-            addr,
-            meta.object_map(size_class_index, cpu_id),
-            meta.cpu
-        );
+        meta.objects
+            .insert_to_cpu(addr, meta.object_map(size_class_index, cpu_id), meta.cpu);
         return addr as Ptr;
     })
 }
@@ -169,11 +166,10 @@ pub fn size_of(ptr: Ptr) -> Option<usize> {
     let node_id = addr_numa_id(addr);
     let node_meta = &PER_NODE_META[node_id];
     node_meta.objects.refresh();
-    node_meta.objects.get(addr).map(|o| {
-        THREAD_META.with(|meta| {
-            meta.sizes[o.tier].size
-        })
-    })
+    node_meta
+        .objects
+        .get(addr)
+        .map(|o| THREAD_META.with(|meta| meta.sizes[o.tier].size))
 }
 
 #[inline]
@@ -198,8 +194,8 @@ impl ThreadMeta {
         }
     }
 
-    pub fn object_map(&self, tier: usize, cpu: usize) -> Object{
-        Object { tier, cpu, }
+    pub fn object_map(&self, tier: usize, cpu: usize) -> Object {
+        Object { tier, cpu }
     }
 }
 
@@ -228,7 +224,7 @@ impl SizeClass {
     pub fn new(size: usize) -> Self {
         Self {
             size,
-            reserved: ReservedPage::new()
+            reserved: ReservedPage::new(),
         }
     }
 }
@@ -410,7 +406,11 @@ fn maximum_size() -> usize {
 }
 
 fn gen_core_meta() -> Vec<CoreMeta> {
-    (0..*NUM_CPU).map(|_| CoreMeta { free_lists: size_class_free_lists() }).collect()
+    (0..*NUM_CPU)
+        .map(|_| CoreMeta {
+            free_lists: size_class_free_lists(),
+        })
+        .collect()
 }
 
 #[cfg(test)]

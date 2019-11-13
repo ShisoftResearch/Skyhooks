@@ -62,4 +62,3 @@ static INNER_ALLOCATOR: NullocAllocator = NullocAllocator;
 #[global_allocator]
 #[cfg(feature = "bump_heap_only")]
 static INNER_ALLOCATOR: BumpAllocator = BumpAllocator;
-

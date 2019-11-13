@@ -1,19 +1,19 @@
 // eventual-consistent map based on lfmap and lflist from Shisoft
 use crate::collections::lflist;
+use crate::utils::{current_cpu, NUM_CPU};
+use core::cell::Cell;
 use lfmap::{Map, ObjectMap};
+use std::marker::PhantomData;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;
-use crate::utils::{current_cpu, NUM_CPU};
-use std::marker::PhantomData;
-use core::cell::Cell;
 
 type EvBins<V> = Arc<Vec<lflist::List<(usize, V)>>>;
 
 #[derive(Clone)]
 pub struct Producer<V> {
     cache: EvBins<V>,
-    shadow: PhantomData<V>
+    shadow: PhantomData<V>,
 }
 
 pub struct EvMap<V: Clone> {
@@ -29,14 +29,14 @@ impl<V: Clone> EvMap<V> {
         }
         Self {
             map: ObjectMap::with_capacity(4096),
-            source: Arc::new(source)
+            source: Arc::new(source),
         }
     }
 
     pub fn new_producer(&self) -> Producer<V> {
         Producer {
             cache: self.source.clone(),
-            shadow: PhantomData
+            shadow: PhantomData,
         }
     }
 
