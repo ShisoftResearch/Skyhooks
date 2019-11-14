@@ -1,4 +1,5 @@
 use crate::bump_heap::BumpAllocator;
+use crate::{Ptr, Size};
 use alloc::alloc::Global;
 use core::alloc::{Alloc, GlobalAlloc, Layout};
 use core::mem;
@@ -7,7 +8,6 @@ use libc::{sysconf, _SC_PAGESIZE};
 use regex::Regex;
 use std::collections::HashMap;
 use std::fs::read_dir;
-use crate::{Ptr, Size};
 
 lazy_static! {
     pub static ref SYS_PAGE_SIZE: usize = unsafe { sysconf(_SC_PAGESIZE) as usize };
@@ -144,7 +144,10 @@ pub fn dealloc_mem<T, A: Alloc + Default>(ptr: usize, size: usize) {
 #[inline(always)]
 pub fn debug_validate(ptr: Ptr, size: Size) -> Ptr {
     unsafe {
-        debug!("Validated address: {:x}", libc::memset(ptr, 0, size) as usize);
+        debug!(
+            "Validated address: {:x}",
+            libc::memset(ptr, 0, size) as usize
+        );
         ptr
     }
 }
@@ -168,11 +171,15 @@ mod test {
 
     #[bench]
     fn get_cpu(b: &mut Bencher) {
-        b.iter(|| { super::current_cpu(); });
+        b.iter(|| {
+            super::current_cpu();
+        });
     }
 
     #[bench]
     fn baseline(b: &mut Bencher) {
-        b.iter(|| { let _: (usize, usize, usize, usize) = (1, 2, 3, 4).clone(); });
+        b.iter(|| {
+            let _: (usize, usize, usize, usize) = (1, 2, 3, 4).clone();
+        });
     }
 }

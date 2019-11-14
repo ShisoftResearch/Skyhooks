@@ -1,42 +1,42 @@
 // eventual-consistent map based on lfmap and lflist from Shisoft
 use crate::collections::lflist;
+use crate::utils::{current_cpu, NUM_CPU};
+use core::cell::Cell;
 use lfmap::{Map, ObjectMap};
+use std::marker::PhantomData;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;
-use crate::utils::{current_cpu, NUM_CPU};
-use std::marker::PhantomData;
-use core::cell::Cell;
 
-type EvBins<V> = Arc<Vec<lflist::List<(usize, V)>>>;
+type EvBins<V> = Arc<Vec<lflist::ObjectList<(usize, V)>>>;
 
 #[derive(Clone)]
-pub struct Producer<V> {
+pub struct Producer<V: Default> {
     cache: EvBins<V>,
-    shadow: PhantomData<V>
+    shadow: PhantomData<V>,
 }
 
-pub struct EvMap<V: Clone> {
+pub struct EvMap<V: Clone + Default> {
     map: lfmap::ObjectMap<V>,
     source: EvBins<V>,
 }
 
-impl<V: Clone> EvMap<V> {
+impl<V: Clone + Default> EvMap<V> {
     pub fn new() -> Self {
         let mut source = Vec::with_capacity(*NUM_CPU);
         for _ in 0..*NUM_CPU {
-            source.push(lflist::List::new());
+            source.push(lflist::ObjectList::new());
         }
         Self {
             map: ObjectMap::with_capacity(4096),
-            source: Arc::new(source)
+            source: Arc::new(source),
         }
     }
 
     pub fn new_producer(&self) -> Producer<V> {
         Producer {
             cache: self.source.clone(),
-            shadow: PhantomData
+            shadow: PhantomData,
         }
     }
 
@@ -75,7 +75,7 @@ impl<V: Clone> EvMap<V> {
     }
 }
 
-impl<V> Producer<V> {
+impl<V: Default> Producer<V> {
     #[inline]
     pub fn insert(&self, key: usize, value: V) {
         // current_cpu is cheap in Linux: 16 ns/iter (+/- 1)
