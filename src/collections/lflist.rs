@@ -42,6 +42,8 @@ impl<T: Default, A: Alloc + Default> List<T, A> {
     pub fn push(&self, flag: usize, data: T) {
         let backoff = Backoff::new();
         let obj_size = mem::size_of::<T>();
+        debug_assert_ne!(flag, EMPTY_SLOT);
+        debug_assert_ne!(flag, SENTINEL_SLOT);
         loop {
             let head_ptr = self.head.load(Relaxed);
             let page = BufferMeta::borrow(head_ptr);
@@ -155,7 +157,7 @@ impl<T: Default, A: Alloc + Default> List<T, A> {
                 unsafe {
                     let new_slot = slot - 1;
                     let slot_ptr =
-                        (page.lower_bound + slot * mem::size_of::<usize>()) as *mut usize;
+                        (page.lower_bound + new_slot * mem::size_of::<usize>()) as *mut usize;
                     let obj_ptr = (page.upper_bound + slot * mem::size_of::<T>()) as *mut T;
                     let slot_flag = intrinsics::atomic_load_relaxed(slot_ptr);
                     if slot_flag != 0
@@ -175,6 +177,7 @@ impl<T: Default, A: Alloc + Default> List<T, A> {
                             // this slot does not have any useful information, should pop again
                             intrinsics::atomic_store_relaxed(slot_ptr, SENTINEL_SLOT);
                         } else if slot_flag != SENTINEL_SLOT {
+                            self.count.fetch_sub(1, Relaxed);
                             return res;
                         }
                     }
@@ -317,7 +320,8 @@ impl<T: Default, A: Alloc + Default> BufferMeta<T, A> {
         let mut slot_addr = buffer.lower_bound;
         let mut obj_addr = buffer.upper_bound;
         debug_assert!(
-            buffer.refs.load(Relaxed) <= 2,
+            buffer.refs.load(Relaxed) <= 2
+                || buffer.refs.load(Relaxed) >= 256,
             "Reference counting check failed"
         );
         for _ in 0..data_bound {
@@ -451,7 +455,7 @@ mod test {
 
     #[test]
     pub fn general() {
-        let list = WordList::<_, Global>::new(128);
+        let list = WordList::<Global>::new();
         let page_size = *SYS_PAGE_SIZE;
         for i in 2..page_size {
             list.push(i);
@@ -465,13 +469,13 @@ mod test {
         list.push(32);
         list.push(25);
         assert_eq!(list.count(), 2);
-        assert_eq!(list.drop_out_all(), Some(vec![(32, ()), (25, ())]));
+        assert_eq!(list.drop_out_all(), Some(vec![32, 25]));
         assert_eq!(list.count(), 0);
     }
 
     #[test]
     pub fn parallel() {
-        let list = Arc::new(WordList::<_, Global>::new(128));
+        let list = Arc::new(WordList::<Global>::new());
         let page_size = *SYS_PAGE_SIZE;
         let mut threads = (1..page_size)
             .map(|i| {
@@ -494,7 +498,7 @@ mod test {
         for i in 1..page_size {
             list.push(i);
         }
-        let recev_list = Arc::new(WordList::<_, Global>::new());
+        let recev_list = Arc::new(WordList::<Global>::new());
         threads = (page_size..(page_size * 2))
             .map(|i| {
                 let list = list.clone();
@@ -520,9 +524,10 @@ mod test {
         while let Some(v) = recev_list.pop() {
             agg.push(v);
         }
+        let total_insertion = page_size + page_size / 2 - 1;
+        assert_eq!(agg.len(), total_insertion, "unmatch before dedup");
         agg.sort();
         agg.dedup_by_key(|k| *k);
-        let total_insertion = page_size + page_size / 2 - 1;
-        assert_eq!(agg.len(), total_insertion);
+        assert_eq!(agg.len(), total_insertion, "unmatch after dedup");
     }
 }
