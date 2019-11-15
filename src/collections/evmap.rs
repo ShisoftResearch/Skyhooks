@@ -4,6 +4,7 @@ use crate::utils::{current_cpu, NUM_CPU};
 use core::cell::Cell;
 use lfmap::{Map, ObjectMap};
 use std::marker::PhantomData;
+use std::mem;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;
@@ -42,14 +43,11 @@ impl<V: Clone + Default> EvMap<V> {
 
     pub fn refresh(&self) {
         // get all items from producers and insert into the local map
-        let items = {
-            self.source
-                .iter()
-                .filter_map(|p| p.drop_out_all())
-                .flatten()
-                .collect::<Vec<_>>()
-        };
-        for (k, v) in items {
+        let mut dropped = vec![];
+        self.source.iter().for_each(|p| {
+            p.drop_out_all(Some(&mut dropped));
+        });
+        for (_, (k, v)) in dropped {
             self.map.insert(k, v);
         }
     }

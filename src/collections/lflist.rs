@@ -161,7 +161,7 @@ impl<T: Default, A: Alloc + Default> List<T, A> {
                     // the side effect is not significant to its use case
                     let mut buffer_remains = vec![];
                     drop(page);
-                    let dropped_next = BufferMeta::drop_out(head_ptr, Some(&mut buffer_remains));
+                    let dropped_next = BufferMeta::drop_out(head_ptr, Some(&mut buffer_remains), &mut 0);
                     debug_assert_eq!(dropped_next.unwrap_or(null_mut()), next_buffer_ptr);
                     for (flag, data) in buffer_remains {
                         if flag != EMPTY_SLOT && flag != SENTINEL_SLOT {
@@ -212,19 +212,19 @@ impl<T: Default, A: Alloc + Default> List<T, A> {
             backoff.spin();
         }
     }
-    pub fn drop_out_all(&self) -> Option<Vec<(usize, T)>> {
+    pub fn drop_out_all(&self, mut retain: Option<&mut Vec<(usize, T)>>) {
         if self.count.load(Relaxed) == 0 {
-            return None;
+            return;
         }
-        let mut res = Vec::new();
         let new_head_buffer = BufferMeta::new(self.buffer_cap);
         let mut buffer_ptr = self.head.swap(new_head_buffer, Relaxed);
         let null = null_mut();
+        let mut counter = 0;
         'main: while buffer_ptr != null {
-            buffer_ptr = BufferMeta::drop_out(buffer_ptr, Some(&mut res)).unwrap_or(null);
+            let mut retain = retain.as_deref_mut();
+            buffer_ptr = BufferMeta::drop_out(buffer_ptr, retain, &mut counter).unwrap_or(null);
         }
-        self.count.fetch_sub(res.len(), Relaxed);
-        return Some(res);
+        self.count.fetch_sub(counter, Relaxed);
     }
 
     pub fn prepend_with(&self, other: &Self) {
@@ -310,7 +310,7 @@ impl<T: Default, A: Alloc + Default> BufferMeta<T, A> {
         let total_size = buffer_ref.total_size;
         if mem::needs_drop::<T>() {
             let mut objs = vec![];
-            Self::flush_buffer(buffer_ref, Some(&mut objs));
+            Self::flush_buffer(buffer_ref, Some(&mut objs),  &mut 0);
             for obj in objs {
                 drop(obj)
             }
@@ -320,7 +320,7 @@ impl<T: Default, A: Alloc + Default> BufferMeta<T, A> {
 
     // only use when the buffer is about to be be dead
     // this require reference checking
-    fn flush_buffer(buffer: &Self, mut retain: Option<&mut Vec<(usize, T)>>) {
+    fn flush_buffer(buffer: &Self, mut retain: Option<&mut Vec<(usize, T)>>, counter: &mut usize) {
         let size_of_obj = mem::size_of::<T>();
         let data_bound = buffer.head.load(Relaxed);
         let mut slot_addr = buffer.lower_bound;
@@ -341,6 +341,7 @@ impl<T: Default, A: Alloc + Default> BufferMeta<T, A> {
                     if let Some(ref mut res) = retain {
                         res.push(rest);
                     }
+                    *counter += 1;
                 }
             }
             slot_addr += mem::size_of::<usize>();
@@ -349,7 +350,7 @@ impl<T: Default, A: Alloc + Default> BufferMeta<T, A> {
         buffer.head.store(0, Relaxed);
     }
 
-    fn drop_out(buffer_ptr: *mut Self, retain: Option<&mut Vec<(usize, T)>>) ->Option<*mut Self> {
+    fn drop_out(buffer_ptr: *mut Self, retain: Option<&mut Vec<(usize, T)>>, counter: &mut usize) ->Option<*mut Self> {
         let buffer = BufferMeta::borrow(buffer_ptr);
         let next_ptr = buffer.next.load(Relaxed);
         let backoff = Backoff::new();
@@ -383,7 +384,7 @@ impl<T: Default, A: Alloc + Default> BufferMeta<T, A> {
             } else if rc == 2 {
                 // no other reference, flush and break out waiting
                 buffer.refs.store(rc, Relaxed);
-                BufferMeta::flush_buffer(&*buffer, retain);
+                BufferMeta::flush_buffer(&*buffer, retain, counter);
                 BufferMeta::unref(buffer_ptr);
                 return Some(next_ptr);
             }
@@ -418,8 +419,6 @@ impl<T: Default, A: Alloc + Default> Deref for BufferRef<T, A> {
     }
 }
 
-const SLOT_DATA_OFFSET: usize = 5;
-
 pub struct WordList<A: Alloc + Default = Global> {
     inner: List<(), A>,
 }
@@ -434,19 +433,21 @@ impl<A: Alloc + Default> WordList<A> {
         Self::with_capacity(256)
     }
     pub fn push(&self, data: usize) {
-        self.inner.push(data + SLOT_DATA_OFFSET, ())
+        debug_assert_ne!(data, 0);
+        debug_assert_ne!(data, 1);
+        self.inner.push(data, ())
     }
     pub fn exclusive_push(&self, data: usize) {
-        self.inner.exclusive_push(data + SLOT_DATA_OFFSET, ())
+        debug_assert_ne!(data, 0);
+        debug_assert_ne!(data, 1);
+        self.inner.exclusive_push(data, ())
     }
     pub fn pop(&self) -> Option<usize> {
-        self.inner.pop().map(|(data, _)| data - SLOT_DATA_OFFSET)
+        self.inner.pop().map(|(data, _)| data)
     }
 
-    pub fn drop_out_all(&self) -> Option<Vec<usize>> {
-        self.inner
-            .drop_out_all()
-            .map(|vec| vec.into_iter().map(|(v, _)| v - SLOT_DATA_OFFSET).collect())
+    pub fn drop_out_all(&self, retain: Option<&mut Vec<(usize, ())>>) {
+        self.inner.drop_out_all(retain);
     }
     pub fn prepend_with(&self, other: &Self) {
         self.inner.prepend_with(&other.inner)
@@ -479,10 +480,8 @@ impl<T: Default, A: Alloc + Default> ObjectList<T, A> {
         self.inner.pop().map(|(_, obj)| obj)
     }
 
-    pub fn drop_out_all(&self) -> Option<Vec<T>> {
-        self.inner
-            .drop_out_all()
-            .map(|vec| vec.into_iter().map(|(_, obj)| obj).collect())
+    pub fn drop_out_all(&self, retain: Option<&mut Vec<(usize, T)>>) {
+        self.inner.drop_out_all(retain)
     }
 
     pub fn prepend_with(&self, other: &Self) {
@@ -517,7 +516,9 @@ mod test {
         list.push(32);
         list.push(25);
         assert_eq!(list.count(), 2);
-        assert_eq!(list.drop_out_all(), Some(vec![32, 25]));
+        let mut dropped = vec![];
+        list.drop_out_all(Some(&mut dropped));
+        assert_eq!(dropped, vec![(32, ()), (25, ())]);
         assert_eq!(list.count(), 0);
     }
 
@@ -525,7 +526,7 @@ mod test {
     pub fn parallel() {
         let page_size = *SYS_PAGE_SIZE;
         let list = Arc::new(WordList::<Global>::with_capacity(64));
-        let mut threads = (1..page_size)
+        let mut threads = (2..page_size)
             .map(|i| {
                 let list = list.clone();
                 thread::spawn(move || {
@@ -541,9 +542,9 @@ mod test {
         while list.pop().is_some() {
             counter += 1;
         }
-        assert_eq!(counter, page_size - 1);
+        assert_eq!(counter, page_size - 2);
 
-        for i in 1..page_size {
+        for i in 2..page_size {
             list.push(i);
         }
         let recev_list = Arc::new(WordList::<Global>::with_capacity(64));
@@ -574,7 +575,7 @@ mod test {
         }
         assert_eq!(recev_list.count(), 0, "receive counter not match");
         assert_eq!(list.count(), 0, "origin counter not match");
-        let total_insertion = page_size + page_size / 2 - 1;
+        let total_insertion = page_size + page_size / 2 - 2;
         assert_eq!(agg.len(), total_insertion, "unmatch before dedup");
         agg.sort();
         agg.dedup_by_key(|k| *k);

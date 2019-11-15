@@ -302,10 +302,10 @@ impl RemoteNodeFree {
     }
 
     pub fn free_all(&self) {
-        if let Some(to_free) = self.pending_free.drop_out_all() {
-            for addr in to_free {
-                free(addr as Ptr);
-            }
+        let mut to_free_vec = vec![];
+        self.pending_free.drop_out_all(Some(&mut to_free_vec));
+        for (addr, _) in to_free_vec {
+            free(addr as Ptr);
         }
     }
 }
