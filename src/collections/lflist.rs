@@ -40,6 +40,11 @@ impl<T: Default, A: Alloc + Default> List<T, A> {
     }
 
     pub fn push(&self, flag: usize, data: T) {
+        self.do_push(flag, data);
+        self.count.fetch_add(1, Relaxed);
+    }
+
+    fn do_push(&self, flag: usize, data: T) {
         let backoff = Backoff::new();
         let obj_size = mem::size_of::<T>();
         debug_assert_ne!(flag, EMPTY_SLOT);
@@ -80,8 +85,7 @@ impl<T: Default, A: Alloc + Default> List<T, A> {
                             EMPTY_SLOT
                         );
                     }
-                    self.count.fetch_add(1, Relaxed);
-                    break;
+                    return;
                 }
             }
             backoff.spin();
@@ -149,7 +153,21 @@ impl<T: Default, A: Alloc + Default> List<T, A> {
                     .compare_and_swap(head_ptr, next_buffer_ptr, Relaxed)
                     == head_ptr
                 {
-                    BufferMeta::unref(head_ptr);
+                    // At thia point, there may have some items in the old head.
+                    // Need to check spin wait for other threads to finish working on this buffer
+                    // and check head to put back remaining items into the list
+                    // This approach may break ordering but we have no other choice here and
+                    // the side effect is not significant to its use case
+                    let mut buffer_remains = vec![];
+                    drop(page);
+                    let dropped_next = BufferMeta::drop_out(head_ptr, Some(&mut buffer_remains));
+                    debug_assert_eq!(dropped_next.unwrap_or(null_mut()), next_buffer_ptr);
+                    for (flag, data) in buffer_remains {
+                        if flag != EMPTY_SLOT && flag != SENTINEL_SLOT {
+                            self.do_push(flag, data); // push without bump counter
+                        }
+                    }
+                    // don't need to unref here for drop out did this for us
                 }
                 continue;
             }
@@ -197,34 +215,12 @@ impl<T: Default, A: Alloc + Default> List<T, A> {
         if self.count.load(Relaxed) == 0 {
             return None;
         }
-        let backoff = Backoff::new();
         let mut res = Vec::new();
         let new_head_buffer = BufferMeta::new(self.buffer_cap);
         let mut buffer_ptr = self.head.swap(new_head_buffer, Relaxed);
-        let word_size = mem::size_of::<usize>();
-        'main: while buffer_ptr != null_mut() {
-            let buffer = BufferMeta::borrow(buffer_ptr);
-            let next_ptr = buffer.next.load(Relaxed);
-            loop {
-                //wait until reference counter reach 2 one for not garbage one for current reference)
-                let flag = 1 << word_size;
-                let ref_num = buffer.refs.compare_and_swap(2, flag, Relaxed);
-                if ref_num >= (flag << (word_size >> 1)) {
-                    // dropping out by another thread, break
-                    break 'main;
-                } else if ref_num <= 1 {
-                    // this buffer is marked to be gc, untouched
-                    break 'main;
-                } else if ref_num == 2 {
-                    // no other reference, flush and break out waiting
-                    BufferMeta::flush_buffer(&*buffer, Some(&mut res));
-                    BufferMeta::unref(buffer_ptr);
-                    buffer_ptr = next_ptr;
-                    break;
-                }
-                backoff.spin();
-            }
-            backoff.spin();
+        let null = null_mut();
+        'main: while buffer_ptr != null {
+            buffer_ptr = BufferMeta::drop_out(buffer_ptr, Some(&mut res)).unwrap_or(null);
         }
         self.count.fetch_sub(res.len(), Relaxed);
         return Some(res);
@@ -346,6 +342,41 @@ impl<T: Default, A: Alloc + Default> BufferMeta<T, A> {
             obj_addr += mem::size_of::<T>();
         }
         buffer.head.store(0, Relaxed);
+    }
+
+    fn drop_out(buffer_ptr: *mut Self, retain: Option<&mut Vec<(usize, T)>>) ->Option<*mut Self> {
+        let buffer = BufferMeta::borrow(buffer_ptr);
+        let next_ptr = buffer.next.load(Relaxed);
+        let backoff = Backoff::new();
+        let word_bits = mem::size_of::<usize>() << 3;
+        let flag = 1 << (word_bits - 1);
+        {
+            let rc = buffer.refs.load(Relaxed);
+            if rc > flag {
+                // discovered other drop out, give up
+                return None;
+            }
+            if buffer.refs.compare_and_swap(rc, rc | flag, Relaxed) > flag {
+                // discovered other drop out, give up
+                return None;
+            }
+        }
+        loop {
+            //wait until reference counter reach 2 one for not garbage one for current reference)
+            let rc = buffer.refs.load(Relaxed);
+            debug_assert!(rc > flag);
+            let rc = rc & !flag;
+            if rc <= 1 {
+                // this buffer is marked to be gc, untouched
+                return Some(next_ptr);
+            } else if rc == 2 {
+                // no other reference, flush and break out waiting
+                BufferMeta::flush_buffer(&*buffer, retain);
+                BufferMeta::unref(buffer_ptr);
+                return Some(next_ptr);
+            }
+            backoff.spin();
+        }
     }
 
     fn borrow(buffer: *mut Self) -> BufferRef<T, A> {
@@ -481,7 +512,7 @@ mod test {
     #[test]
     pub fn parallel() {
         let page_size = *SYS_PAGE_SIZE;
-        let list = Arc::new(WordList::<Global>::new());
+        let list = Arc::new(WordList::<Global>::with_capacity(64));
         let mut threads = (1..page_size)
             .map(|i| {
                 let list = list.clone();
@@ -503,7 +534,7 @@ mod test {
         for i in 1..page_size {
             list.push(i);
         }
-        let recev_list = Arc::new(WordList::<Global>::new());
+        let recev_list = Arc::new(WordList::<Global>::with_capacity(64));
         threads = (page_size..(page_size * 2))
             .map(|i| {
                 let list = list.clone();
