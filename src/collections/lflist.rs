@@ -9,8 +9,8 @@ use std::alloc::Global;
 use std::intrinsics::size_of;
 use std::ops::Deref;
 use std::ptr::null_mut;
-use std::sync::atomic::Ordering::Relaxed;
-use std::sync::atomic::{AtomicPtr, AtomicUsize};
+use std::sync::atomic::Ordering::{Relaxed, SeqCst};
+use std::sync::atomic::{AtomicPtr, AtomicUsize, fence};
 
 const EMPTY_SLOT: usize = 0;
 const SENTINEL_SLOT: usize = 1;
@@ -74,6 +74,7 @@ impl<T: Default, A: Alloc + Default> List<T, A> {
                         if obj_size != 0 {
                             ptr::write(obj_ptr, data);
                         }
+                        fence(SeqCst);
                         assert_eq!(
                             intrinsics::atomic_cxchg_relaxed(slot_ptr, EMPTY_SLOT, flag).0,
                             EMPTY_SLOT
@@ -169,14 +170,18 @@ impl<T: Default, A: Alloc + Default> List<T, A> {
                             res.as_mut()
                                 .map(|(_, obj)| *obj = unsafe { ptr::read(obj_ptr as *mut T) });
                         }
-                        if page.head.compare_and_swap(slot, new_slot, Relaxed) != slot {
+                        fence(SeqCst);
+                        let swapped = page.head.compare_and_swap(slot, new_slot, Relaxed);
+                        debug_assert!(swapped >= slot, "Exclusive pop failed, {} expect {}", swapped, slot);
+                        if swapped != slot {
                             // Swap page head failed
                             // The only possible scenario is that there was a push for
                             // pop will back off if flag is detected as zero
                             // In this case, we have a hole in the list, should indicate pop that
                             // this slot does not have any useful information, should pop again
-                            intrinsics::atomic_store_relaxed(slot_ptr, SENTINEL_SLOT);
-                        } else if slot_flag != SENTINEL_SLOT {
+                            intrinsics::atomic_store(slot_ptr, SENTINEL_SLOT);
+                        }
+                        if slot_flag != SENTINEL_SLOT {
                             self.count.fetch_sub(1, Relaxed);
                             return res;
                         }
@@ -475,8 +480,8 @@ mod test {
 
     #[test]
     pub fn parallel() {
-        let list = Arc::new(WordList::<Global>::new());
         let page_size = *SYS_PAGE_SIZE;
+        let list = Arc::new(WordList::<Global>::new());
         let mut threads = (1..page_size)
             .map(|i| {
                 let list = list.clone();
@@ -524,6 +529,8 @@ mod test {
         while let Some(v) = recev_list.pop() {
             agg.push(v);
         }
+        assert_eq!(recev_list.count(), 0, "receive counter not match");
+        assert_eq!(list.count(), 0, "origin counter not match");
         let total_insertion = page_size + page_size / 2 - 1;
         assert_eq!(agg.len(), total_insertion, "unmatch before dedup");
         agg.sort();
