@@ -21,6 +21,7 @@ struct BufferMeta<T: Default, A: Alloc + Default> {
     refs: AtomicUsize,
     upper_bound: usize,
     lower_bound: usize,
+    total_size: usize,
 }
 
 pub struct List<T: Default, A: Alloc + Default = Global> {
@@ -279,8 +280,8 @@ impl<T: Default, A: Alloc + Default> BufferMeta<T, A> {
         let meta_size = mem::size_of::<Self>();
         let slots_size = buffer_cap * mem::size_of::<usize>();
         let data_size = buffer_cap * mem::size_of::<T>();
-        let page_size = meta_size + slots_size + data_size;
-        let head_page = alloc_mem::<T, A>(page_size) as *mut Self;
+        let total_size = meta_size + slots_size + data_size;
+        let head_page = alloc_mem::<T, A>(total_size) as *mut Self;
         let head_page_address = head_page as usize;
         let slots_start = head_page_address + meta_size;
         *(unsafe { &mut *head_page }) = Self {
@@ -289,6 +290,7 @@ impl<T: Default, A: Alloc + Default> BufferMeta<T, A> {
             refs: AtomicUsize::new(1),
             upper_bound: slots_start + slots_size,
             lower_bound: slots_start,
+            total_size
         };
         head_page
     }
@@ -304,13 +306,16 @@ impl<T: Default, A: Alloc + Default> BufferMeta<T, A> {
     }
 
     fn gc(buffer: *mut Self) {
-        let page_size = *SYS_PAGE_SIZE;
-        let mut objs = Vec::with_capacity(page_size);
-        Self::flush_buffer(unsafe { &*buffer }, Some(&mut objs));
-        for obj in objs {
-            drop(obj)
+        let buffer_ref = unsafe { &*buffer };
+        let total_size = buffer_ref.total_size;
+        if mem::needs_drop::<T>() {
+            let mut objs = vec![];
+            Self::flush_buffer(buffer_ref, Some(&mut objs));
+            for obj in objs {
+                drop(obj)
+            }
         }
-        dealloc_mem::<T, A>(buffer as usize, page_size)
+        dealloc_mem::<T, A>(buffer as usize, total_size)
     }
 
     // only use when the buffer is about to be be dead
