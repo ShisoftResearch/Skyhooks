@@ -88,13 +88,23 @@ pub fn current_cpu() -> usize {
 
 #[cfg(not(target_os = "linux"))]
 pub fn current_cpu() -> usize {
-    0
+    current_thread_id() % *NUM_CPU
 }
 
 #[cfg(target_os = "linux")]
 pub fn current_numa() -> usize {
     let cpu = current_cpu();
-    SYS_CPU_NODE.get(&cpu).map(|x| *x).unwrap_or(0)
+    numa_from_cpu_id(cpu)
+}
+
+#[cfg(target_os = "linux")]
+pub fn numa_from_cpu_id(cpu_id: usize) -> usize {
+    SYS_CPU_NODE.get(&cpu_id).map(|x| *x).unwrap_or(0)
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn numa_from_cpu_id(cpu_id: usize) -> usize {
+    0
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -154,6 +164,8 @@ pub fn debug_validate(ptr: Ptr, size: Size) -> Ptr {
 
 #[cfg(test)]
 mod test {
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering::Relaxed;
     use test::Bencher;
 
     #[test]
@@ -180,6 +192,39 @@ mod test {
     fn baseline(b: &mut Bencher) {
         b.iter(|| {
             let _: (usize, usize, usize, usize) = (1, 2, 3, 4).clone();
+        });
+    }
+
+    #[bench]
+    fn atomic_lock(b: &mut Bencher) {
+        let atomic = AtomicUsize::new(0);
+        b.iter(|| {
+            atomic.fetch_add(1, Relaxed);
+        });
+    }
+
+    #[bench]
+    fn atomic_cas(b: &mut Bencher) {
+        let atomic = AtomicUsize::new(0);
+        b.iter(|| {
+            atomic.compare_and_swap(0, 1, Relaxed);
+        });
+    }
+
+    #[bench]
+    fn atomic_load(b: &mut Bencher) {
+        let atomic = AtomicUsize::new(100);
+        let mut res = 0;
+        b.iter(|| {
+            res = atomic.load(Relaxed);
+        });
+    }
+
+    #[bench]
+    fn atomic_store(b: &mut Bencher) {
+        let atomic = AtomicUsize::new(100);
+        b.iter(|| {
+            atomic.store(1, Relaxed);
         });
     }
 }
