@@ -2,15 +2,20 @@
 
 use crate::utils::*;
 use core::alloc::Alloc;
-use core::mem;
 use core::ptr;
+use core::{intrinsics, mem};
+use crossbeam::utils::Backoff;
 use std::alloc::Global;
+use std::intrinsics::size_of;
 use std::ops::Deref;
 use std::ptr::null_mut;
-use std::sync::atomic::Ordering::Relaxed;
-use std::sync::atomic::{AtomicPtr, AtomicUsize};
+use std::sync::atomic::Ordering::{Relaxed, SeqCst};
+use std::sync::atomic::{AtomicPtr, AtomicUsize, fence};
 
-struct BufferMeta<T, A: Alloc + Default> {
+const EMPTY_SLOT: usize = 0;
+const SENTINEL_SLOT: usize = 1;
+
+struct BufferMeta<T: Default, A: Alloc + Default> {
     head: AtomicUsize,
     next: AtomicPtr<BufferMeta<T, A>>,
     refs: AtomicUsize,
@@ -18,64 +23,87 @@ struct BufferMeta<T, A: Alloc + Default> {
     lower_bound: usize,
 }
 
-pub struct List<T, A: Alloc + Default = Global> {
+pub struct List<T: Default, A: Alloc + Default = Global> {
     head: AtomicPtr<BufferMeta<T, A>>,
     count: AtomicUsize,
+    buffer_cap: usize,
 }
 
-impl<T, A: Alloc + Default> List<T, A> {
-    pub fn new() -> Self {
-        let first_buffer = BufferMeta::new();
+impl<T: Default, A: Alloc + Default> List<T, A> {
+    pub fn new(buffer_cap: usize) -> Self {
+        let first_buffer = BufferMeta::new(buffer_cap);
         Self {
             head: AtomicPtr::new(first_buffer),
             count: AtomicUsize::new(0),
+            buffer_cap,
         }
     }
 
-    pub fn push(&self, item: T) {
-        let mut pos = 0;
-        let mut page;
+    pub fn push(&self, flag: usize, data: T) {
+        self.do_push(flag, data);
+        self.count.fetch_add(1, Relaxed);
+    }
+
+    fn do_push(&self, flag: usize, data: T) {
+        let backoff = Backoff::new();
+        let obj_size = mem::size_of::<T>();
+        debug_assert_ne!(flag, EMPTY_SLOT);
+        debug_assert_ne!(flag, SENTINEL_SLOT);
         loop {
             let head_ptr = self.head.load(Relaxed);
-            page = BufferMeta::borrow(head_ptr);
-            pos = page.head.load(Relaxed);
-            let next_pos = pos + mem::size_of::<T>();
-            if next_pos > page.upper_bound {
+            let page = BufferMeta::borrow(head_ptr);
+            let slot_pos = page.head.load(Relaxed);
+            let next_pos = slot_pos + 1;
+            if next_pos > self.buffer_cap {
                 // buffer overflow, make new and link to last buffer
-                let new_head = BufferMeta::new();
+                let new_head = BufferMeta::new(self.buffer_cap);
                 unsafe {
                     (*new_head).next.store(head_ptr, Relaxed);
                 }
                 if self.head.compare_and_swap(head_ptr, new_head, Relaxed) != head_ptr {
                     BufferMeta::unref(new_head);
                 }
-                // either case, retry
-                continue;
+            // either case, retry
             } else {
-                let ptr = pos as *mut T;
-                if page.head.compare_and_swap(pos, next_pos, Relaxed) == pos {
+                // in this part, we will try to reason about the push on an buffer
+                // It will first try to CAS the head then write the item, finally store a
+                // non-zero flag (or value) to the slot.
+
+                // Note that zero in the slot indicates not complete on pop, then pop
+                // will back off and try again
+                if page.head.compare_and_swap(slot_pos, next_pos, Relaxed) == slot_pos {
+                    let slot_ptr =
+                        (page.lower_bound + slot_pos * mem::size_of::<usize>()) as *mut usize;
+                    let obj_ptr = (page.upper_bound + slot_pos * obj_size) as *mut T;
                     unsafe {
-                        ptr::write(ptr, item);
+                        if obj_size != 0 {
+                            ptr::write(obj_ptr, data);
+                        }
+                        fence(SeqCst);
+                        assert_eq!(
+                            intrinsics::atomic_cxchg_relaxed(slot_ptr, EMPTY_SLOT, flag).0,
+                            EMPTY_SLOT
+                        );
                     }
-                    self.count.fetch_add(1, Relaxed);
-                    break;
+                    return;
                 }
             }
+            backoff.spin();
         }
     }
 
-    pub fn exclusive_push(&self, item: T) {
+    pub fn exclusive_push(&self, flag: usize, data: T) {
         // user ensure the push is exclusive, thus no CAS except for header
-        let mut pos = 0;
-        let mut page;
+        let backoff = Backoff::new();
+        let obj_size = mem::size_of::<T>();
         loop {
             let head_ptr = self.head.load(Relaxed);
-            page = BufferMeta::borrow(head_ptr);
-            pos = page.head.load(Relaxed);
-            let next_pos = pos + mem::size_of::<T>();
-            if next_pos > page.upper_bound {
+            let page = BufferMeta::borrow(head_ptr);
+            let slot = page.head.load(Relaxed);
+            let next_slot = slot + 1;
+            if next_slot > self.buffer_cap {
                 // buffer overflow, make new and link to last buffer
-                let new_head = BufferMeta::new();
+                let new_head = BufferMeta::new(self.buffer_cap);
                 unsafe {
                     (*new_head).next.store(head_ptr, Relaxed);
                 }
@@ -83,91 +111,116 @@ impl<T, A: Alloc + Default> List<T, A> {
                 if self.head.compare_and_swap(head_ptr, new_head, Relaxed) != head_ptr {
                     BufferMeta::unref(new_head);
                 }
-                // either case, retry
-                continue;
+            // either case, retry
             } else {
-                let ptr = pos as *mut T;
-                page.head.store(next_pos, Relaxed);
+                let slot_ptr = (page.lower_bound + slot * mem::size_of::<usize>()) as *mut usize;
+                let obj_ptr = (page.upper_bound + slot * mem::size_of::<T>()) as *mut T;
+                page.head.store(next_slot, Relaxed);
                 unsafe {
-                    ptr::write(ptr, item);
+                    if obj_size != 0 {
+                        ptr::write(obj_ptr, data);
+                    }
+                    intrinsics::atomic_store_relaxed(slot_ptr, flag);
                 }
                 self.count.fetch_add(1, Relaxed);
                 break;
             }
+            backoff.spin();
         }
     }
 
-    pub fn pop(&self) -> Option<T> {
+    pub fn pop(&self) -> Option<(usize, T)> {
         if self.count.load(Relaxed) == 0 {
             return None;
         }
-        let mut page;
+        let backoff = Backoff::new();
+        let obj_size = mem::size_of::<T>();
         loop {
             let head_ptr = self.head.load(Relaxed);
-            page = BufferMeta::borrow(head_ptr);
-            let pos = page.head.load(Relaxed);
+            let page = BufferMeta::borrow(head_ptr);
+            let slot = page.head.load(Relaxed);
             let obj_size = mem::size_of::<T>();
-            let new_pos = pos - obj_size;
-            if pos == page.lower_bound && page.next.load(Relaxed) == null_mut() {
+            let next_buffer_ptr = page.next.load(Relaxed);
+            if slot == 0 && next_buffer_ptr == null_mut() {
                 // empty buffer chain
                 return None;
             }
-            if pos == page.lower_bound {
+            if slot == 0 && next_buffer_ptr != null_mut() {
                 // last item, need to remove this head and swap to the next one
-                let next = page.next.load(Relaxed);
                 // CAS page head to four times of the upper bound indicates this buffer is obsolete
-                if next != null_mut() {
-                    if self.head.compare_and_swap(head_ptr, next, Relaxed) == head_ptr {
-                        BufferMeta::unref(head_ptr);
-                    } else {
-                        page.head.store(pos, Relaxed);
+                if self
+                    .head
+                    .compare_and_swap(head_ptr, next_buffer_ptr, Relaxed)
+                    == head_ptr
+                {
+                    // At thia point, there may have some items in the old head.
+                    // Need to check spin wait for other threads to finish working on this buffer
+                    // and check head to put back remaining items into the list
+                    // This approach may break ordering but we have no other choice here and
+                    // the side effect is not significant to its use case
+                    let mut buffer_remains = vec![];
+                    drop(page);
+                    let dropped_next = BufferMeta::drop_out(head_ptr, Some(&mut buffer_remains));
+                    debug_assert_eq!(dropped_next.unwrap_or(null_mut()), next_buffer_ptr);
+                    for (flag, data) in buffer_remains {
+                        if flag != EMPTY_SLOT && flag != SENTINEL_SLOT {
+                            self.do_push(flag, data); // push without bump counter
+                        }
                     }
+                    // don't need to unref here for drop out did this for us
                 }
                 continue;
             }
             let mut res = None;
-            if new_pos >= page.lower_bound {
-                res = Some(unsafe { ptr::read(new_pos as *mut T) });
-                if page.head.compare_and_swap(pos, new_pos, Relaxed) != pos {
-                    // cannot swap head
-                    mem::forget(res.unwrap()); // won't call drop for this one
-                    continue;
+            if slot > 0 {
+                unsafe {
+                    let new_slot = slot - 1;
+                    let slot_ptr =
+                        (page.lower_bound + new_slot * mem::size_of::<usize>()) as *mut usize;
+                    let obj_ptr = (page.upper_bound + slot * mem::size_of::<T>()) as *mut T;
+                    let slot_flag = intrinsics::atomic_load_relaxed(slot_ptr);
+                    if slot_flag != 0
+                        // first things first, swap the slot to zero if it is not zero
+                        && intrinsics::atomic_cxchg_relaxed(slot_ptr, slot_flag, EMPTY_SLOT).1
+                    {
+                        res = Some((slot_flag, T::default()));
+                        if obj_size != 0 && slot_flag != SENTINEL_SLOT {
+                            res.as_mut()
+                                .map(|(_, obj)| *obj = unsafe { ptr::read(obj_ptr as *mut T) });
+                        }
+                        fence(SeqCst);
+                        let swapped = page.head.compare_and_swap(slot, new_slot, Relaxed);
+                        debug_assert!(swapped >= slot, "Exclusive pop failed, {} expect {}", swapped, slot);
+                        if swapped != slot {
+                            // Swap page head failed
+                            // The only possible scenario is that there was a push for
+                            // pop will back off if flag is detected as zero
+                            // In this case, we have a hole in the list, should indicate pop that
+                            // this slot does not have any useful information, should pop again
+                            intrinsics::atomic_store(slot_ptr, SENTINEL_SLOT);
+                        }
+                        if slot_flag != SENTINEL_SLOT {
+                            self.count.fetch_sub(1, Relaxed);
+                            return res;
+                        }
+                    }
                 }
             } else {
-                continue;
+                return res;
             }
-            self.count.fetch_sub(1, Relaxed);
-            return res;
+            backoff.spin();
         }
     }
-    pub fn drop_out_all(&self) -> Option<Vec<T>> {
+    pub fn drop_out_all(&self) -> Option<Vec<(usize, T)>> {
         if self.count.load(Relaxed) == 0 {
             return None;
         }
         let mut res = Vec::new();
-        let new_head_buffer = BufferMeta::new();
+        let new_head_buffer = BufferMeta::new(self.buffer_cap);
         let mut buffer_ptr = self.head.swap(new_head_buffer, Relaxed);
-        'main: while buffer_ptr != null_mut() {
-            let buffer = BufferMeta::borrow(buffer_ptr);
-            let next_ptr = buffer.next.load(Relaxed);
-            loop {
-                //wait until reference counter reach 2 one for not garbage one for current reference)
-                let flag = 1 << mem::size_of::<usize>();
-                let ref_num = buffer.refs.compare_and_swap(2, flag, Relaxed);
-                if ref_num >= flag {
-                    // dropping out by another thread, break
-                    break 'main;
-                } else if ref_num <= 1 {
-                    // this buffer is marked to be gc, untouched
-                    break 'main;
-                } else if ref_num == 2 {
-                    // no other reference, flush and break out waiting
-                    BufferMeta::flush_buffer(&*buffer, Some(&mut res));
-                    BufferMeta::unref(buffer_ptr);
-                    buffer_ptr = next_ptr;
-                    break;
-                }
-            }
+        let null = null_mut();
+        'main: while buffer_ptr != null {
+            buffer_ptr = BufferMeta::drop_out(buffer_ptr, Some(&mut res)).unwrap_or(null);
         }
         self.count.fetch_sub(res.len(), Relaxed);
         return Some(res);
@@ -177,7 +230,7 @@ impl<T, A: Alloc + Default> List<T, A> {
         if other.count.load(Relaxed) == 0 {
             return;
         }
-        let other_head = other.head.swap(BufferMeta::new(), Relaxed);
+        let other_head = other.head.swap(BufferMeta::new(self.buffer_cap), Relaxed);
         let other_count = other.count.swap(0, Relaxed);
         let mut other_tail = BufferMeta::borrow(other_head);
         // probe the last buffer in other link
@@ -208,7 +261,7 @@ impl<T, A: Alloc + Default> List<T, A> {
     }
 }
 
-impl<T, A: Alloc + Default> Drop for List<T, A> {
+impl<T: Default, A: Alloc + Default> Drop for List<T, A> {
     fn drop(&mut self) {
         unsafe {
             let mut node_ptr = self.head.load(Relaxed);
@@ -221,18 +274,21 @@ impl<T, A: Alloc + Default> Drop for List<T, A> {
     }
 }
 
-impl<T, A: Alloc + Default> BufferMeta<T, A> {
-    pub fn new() -> *mut BufferMeta<T, A> {
-        let page_size = *SYS_PAGE_SIZE;
+impl<T: Default, A: Alloc + Default> BufferMeta<T, A> {
+    pub fn new(buffer_cap: usize) -> *mut BufferMeta<T, A> {
+        let meta_size = mem::size_of::<Self>();
+        let slots_size = buffer_cap * mem::size_of::<usize>();
+        let data_size = buffer_cap * mem::size_of::<T>();
+        let page_size = meta_size + slots_size + data_size;
         let head_page = alloc_mem::<T, A>(page_size) as *mut Self;
         let head_page_address = head_page as usize;
-        let start = head_page_address + mem::size_of::<Self>();
+        let slots_start = head_page_address + meta_size;
         *(unsafe { &mut *head_page }) = Self {
-            head: AtomicUsize::new(start),
+            head: AtomicUsize::new(0),
             next: AtomicPtr::new(null_mut()),
             refs: AtomicUsize::new(1),
-            upper_bound: head_page_address + page_size,
-            lower_bound: start,
+            upper_bound: slots_start + slots_size,
+            lower_bound: slots_start,
         };
         head_page
     }
@@ -257,22 +313,70 @@ impl<T, A: Alloc + Default> BufferMeta<T, A> {
         dealloc_mem::<T, A>(buffer as usize, page_size)
     }
 
-    fn flush_buffer(buffer: &Self, mut retain: Option<&mut Vec<T>>) {
+    // only use when the buffer is about to be be dead
+    // this require reference checking
+    fn flush_buffer(buffer: &Self, mut retain: Option<&mut Vec<(usize, T)>>) {
         let size_of_obj = mem::size_of::<T>();
-        let mut addr = buffer.lower_bound;
         let data_bound = buffer.head.load(Relaxed);
-        if data_bound <= buffer.upper_bound {
-            // this buffer is not empty
-            while addr < data_bound {
-                let ptr = addr as *mut T;
-                let obj = unsafe { ptr::read(ptr) };
-                if let Some(ref mut res) = retain {
-                    res.push(obj);
+        let mut slot_addr = buffer.lower_bound;
+        let mut obj_addr = buffer.upper_bound;
+        debug_assert!(
+            buffer.refs.load(Relaxed) <= 2
+                || buffer.refs.load(Relaxed) >= 256,
+            "Reference counting check failed"
+        );
+        for _ in 0..data_bound {
+            unsafe {
+                let slot = intrinsics::atomic_load_relaxed(slot_addr as *const usize);
+                if slot != EMPTY_SLOT && slot != SENTINEL_SLOT {
+                    let mut rest = (slot, T::default());
+                    if size_of_obj > 0 {
+                        rest.1 = ptr::read(obj_addr as *const T);
+                    }
+                    if let Some(ref mut res) = retain {
+                        res.push(rest);
+                    }
                 }
-                addr += size_of_obj;
+            }
+            slot_addr += mem::size_of::<usize>();
+            obj_addr += mem::size_of::<T>();
+        }
+        buffer.head.store(0, Relaxed);
+    }
+
+    fn drop_out(buffer_ptr: *mut Self, retain: Option<&mut Vec<(usize, T)>>) ->Option<*mut Self> {
+        let buffer = BufferMeta::borrow(buffer_ptr);
+        let next_ptr = buffer.next.load(Relaxed);
+        let backoff = Backoff::new();
+        let word_bits = mem::size_of::<usize>() << 3;
+        let flag = 1 << (word_bits - 1);
+        {
+            let rc = buffer.refs.load(Relaxed);
+            if rc > flag {
+                // discovered other drop out, give up
+                return None;
+            }
+            if buffer.refs.compare_and_swap(rc, rc | flag, Relaxed) > flag {
+                // discovered other drop out, give up
+                return None;
             }
         }
-        buffer.head.store(buffer.lower_bound, Relaxed);
+        loop {
+            //wait until reference counter reach 2 one for not garbage one for current reference)
+            let rc = buffer.refs.load(Relaxed);
+            debug_assert!(rc > flag);
+            let rc = rc & !flag;
+            if rc <= 1 {
+                // this buffer is marked to be gc, untouched
+                return Some(next_ptr);
+            } else if rc == 2 {
+                // no other reference, flush and break out waiting
+                BufferMeta::flush_buffer(&*buffer, retain);
+                BufferMeta::unref(buffer_ptr);
+                return Some(next_ptr);
+            }
+            backoff.spin();
+        }
     }
 
     fn borrow(buffer: *mut Self) -> BufferRef<T, A> {
@@ -284,17 +388,17 @@ impl<T, A: Alloc + Default> BufferMeta<T, A> {
     }
 }
 
-struct BufferRef<T, A: Alloc + Default> {
+struct BufferRef<T: Default, A: Alloc + Default> {
     ptr: *mut BufferMeta<T, A>,
 }
 
-impl<T, A: Alloc + Default> Drop for BufferRef<T, A> {
+impl<T: Default, A: Alloc + Default> Drop for BufferRef<T, A> {
     fn drop(&mut self) {
         BufferMeta::unref(self.ptr);
     }
 }
 
-impl<T, A: Alloc + Default> Deref for BufferRef<T, A> {
+impl<T: Default, A: Alloc + Default> Deref for BufferRef<T, A> {
     type Target = BufferMeta<T, A>;
 
     fn deref(&self) -> &Self::Target {
@@ -302,9 +406,84 @@ impl<T, A: Alloc + Default> Deref for BufferRef<T, A> {
     }
 }
 
+const SLOT_DATA_OFFSET: usize = 5;
+
+pub struct WordList<A: Alloc + Default = Global> {
+    inner: List<(), A>,
+}
+
+impl<A: Alloc + Default> WordList<A> {
+    pub fn with_capacity(cap: usize) -> Self {
+        Self {
+            inner: List::new(cap),
+        }
+    }
+    pub fn new() -> Self {
+        Self::with_capacity(256)
+    }
+    pub fn push(&self, data: usize) {
+        self.inner.push(data + SLOT_DATA_OFFSET, ())
+    }
+    pub fn exclusive_push(&self, data: usize) {
+        self.inner.exclusive_push(data + SLOT_DATA_OFFSET, ())
+    }
+    pub fn pop(&self) -> Option<usize> {
+        self.inner.pop().map(|(data, _)| data - SLOT_DATA_OFFSET)
+    }
+
+    pub fn drop_out_all(&self) -> Option<Vec<usize>> {
+        self.inner
+            .drop_out_all()
+            .map(|vec| vec.into_iter().map(|(v, _)| v - SLOT_DATA_OFFSET).collect())
+    }
+    pub fn prepend_with(&self, other: &Self) {
+        self.inner.prepend_with(&other.inner)
+    }
+    pub fn count(&self) -> usize {
+        self.inner.count()
+    }
+}
+
+pub struct ObjectList<T: Default, A: Alloc + Default = Global> {
+    inner: List<T, A>,
+}
+
+impl<T: Default, A: Alloc + Default> ObjectList<T, A> {
+    pub fn with_capacity(cap: usize) -> Self {
+        Self {
+            inner: List::new(cap),
+        }
+    }
+    pub fn new() -> Self {
+        Self::with_capacity(256)
+    }
+    pub fn push(&self, data: T) {
+        self.inner.push(!0, data)
+    }
+    pub fn exclusive_push(&self, data: T) {
+        self.inner.exclusive_push(!0, data)
+    }
+    pub fn pop(&self, data: usize) -> Option<T> {
+        self.inner.pop().map(|(_, obj)| obj)
+    }
+
+    pub fn drop_out_all(&self) -> Option<Vec<T>> {
+        self.inner
+            .drop_out_all()
+            .map(|vec| vec.into_iter().map(|(_, obj)| obj).collect())
+    }
+
+    pub fn prepend_with(&self, other: &Self) {
+        self.inner.prepend_with(&other.inner)
+    }
+    pub fn count(&self) -> usize {
+        self.inner.count()
+    }
+}
+
 #[cfg(test)]
 mod test {
-    use crate::collections::lflist::List;
+    use crate::collections::lflist::*;
     use crate::utils::SYS_PAGE_SIZE;
     use std::alloc::Global;
     use std::sync::Arc;
@@ -312,7 +491,7 @@ mod test {
 
     #[test]
     pub fn general() {
-        let list = List::<_, Global>::new();
+        let list = WordList::<Global>::new();
         let page_size = *SYS_PAGE_SIZE;
         for i in 2..page_size {
             list.push(i);
@@ -332,8 +511,8 @@ mod test {
 
     #[test]
     pub fn parallel() {
-        let list = Arc::new(List::<_, Global>::new());
         let page_size = *SYS_PAGE_SIZE;
+        let list = Arc::new(WordList::<Global>::with_capacity(64));
         let mut threads = (1..page_size)
             .map(|i| {
                 let list = list.clone();
@@ -355,7 +534,7 @@ mod test {
         for i in 1..page_size {
             list.push(i);
         }
-        let recev_list = Arc::new(List::<_, Global>::new());
+        let recev_list = Arc::new(WordList::<Global>::with_capacity(64));
         threads = (page_size..(page_size * 2))
             .map(|i| {
                 let list = list.clone();
@@ -381,9 +560,12 @@ mod test {
         while let Some(v) = recev_list.pop() {
             agg.push(v);
         }
+        assert_eq!(recev_list.count(), 0, "receive counter not match");
+        assert_eq!(list.count(), 0, "origin counter not match");
+        let total_insertion = page_size + page_size / 2 - 1;
+        assert_eq!(agg.len(), total_insertion, "unmatch before dedup");
         agg.sort();
         agg.dedup_by_key(|k| *k);
-        let total_insertion = page_size + page_size / 2 - 1;
-        assert_eq!(agg.len(), total_insertion);
+        assert_eq!(agg.len(), total_insertion, "unmatch after dedup");
     }
 }

@@ -16,19 +16,19 @@ unsafe impl Alloc for MmapAllocator {
     unsafe fn dealloc(&mut self, ptr: ptr::NonNull<u8>, layout: Layout) {
         munmap_memory(ptr.as_ptr() as Ptr, layout.size())
     }
-
-
 }
 
 impl Default for MmapAllocator {
-    fn default() -> Self { Self }
+    fn default() -> Self {
+        Self
+    }
 }
 
 #[cfg(test)]
 mod test {
     use crate::bump_heap::BumpAllocator;
-    use lfmap::Map;
     use crate::mmap_heap::MmapAllocator;
+    use lfmap::Map;
 
     #[test]
     pub fn general() {

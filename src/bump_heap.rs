@@ -8,7 +8,7 @@
 // memory space immediately. It is very unsafe.
 
 use crate::collections::lflist;
-use crate::generic_heap::{size_class_index_from_size};
+use crate::generic_heap::size_class_index_from_size;
 use crate::mmap::{dealloc_regional, mmap_without_fd, munmap_memory};
 use crate::mmap_heap::*;
 use crate::utils::*;
@@ -18,8 +18,8 @@ use core::sync::atomic::Ordering::Relaxed;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use core::{mem, ptr};
 use lfmap::Map;
-use std::mem::MaybeUninit;
 use libc::*;
+use std::mem::MaybeUninit;
 
 const BUMP_SIZE_CLASS: usize = 32;
 
@@ -41,7 +41,7 @@ pub struct AllocatorInner {
 
 struct SizeClass {
     size: usize,
-    free_list: lflist::List<usize, MmapAllocator>,
+    free_list: lflist::WordList<MmapAllocator>,
 }
 
 pub const HEAP_VIRT_SIZE: usize = 128 * 1024 * 1024; // 64MB
@@ -150,7 +150,7 @@ unsafe impl GlobalAlloc for AllocatorInner {
             let size_class_index = size_class_index_from_size(actual_size);
             if size_class_index < self.sizes.len() {
                 debug_validate(ptr as Ptr, actual_size);
-                // self.sizes[size_class_index].free_list.push(actual_addr);
+                self.sizes[size_class_index].free_list.push(actual_addr);
             } else {
                 // this may be a problem
                 dealloc_regional(actual_addr as Ptr, actual_size);
@@ -173,7 +173,7 @@ impl SizeClass {
     pub fn new(size: usize) -> Self {
         Self {
             size,
-            free_list: lflist::List::new(),
+            free_list: lflist::WordList::new(),
         }
     }
 }

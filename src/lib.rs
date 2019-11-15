@@ -13,6 +13,7 @@ extern crate lazy_static;
 extern crate log;
 extern crate libc;
 extern crate test;
+extern crate crossbeam;
 
 pub mod api;
 mod bump_heap;
@@ -62,4 +63,3 @@ static INNER_ALLOCATOR: NullocAllocator = NullocAllocator;
 #[global_allocator]
 #[cfg(feature = "bump_heap_only")]
 static INNER_ALLOCATOR: BumpAllocator = BumpAllocator;
-

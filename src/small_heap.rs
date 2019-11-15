@@ -1,7 +1,8 @@
 use super::*;
+use crate::collections::evmap::Producer;
 use crate::collections::fixvec::FixedVec;
-use crate::collections::{lflist, evmap};
-use crate::generic_heap::{ObjectMeta, NUM_SIZE_CLASS, size_class_index_from_size, log_2_of};
+use crate::collections::{evmap, lflist};
+use crate::generic_heap::{log_2_of, size_class_index_from_size, ObjectMeta, NUM_SIZE_CLASS};
 use crate::mmap::mmap_without_fd;
 use crate::utils::*;
 use core::mem;
@@ -10,14 +11,13 @@ use core::sync::atomic::AtomicUsize;
 use crossbeam_queue::SegQueue;
 use lfmap::{Map, ObjectMap};
 use std::cell::RefCell;
+use std::clone::Clone;
 use std::os::unix::thread::JoinHandleExt;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;
 use std::thread;
-use std::clone::Clone;
-use crate::collections::evmap::Producer;
 
-type SharedFreeList = Arc<lflist::List<usize, BumpAllocator>>;
+type SharedFreeList = Arc<lflist::WordList<BumpAllocator>>;
 type TSizeClasses = [SizeClass; NUM_SIZE_CLASS];
 type TCommonSizeClasses = [CommonSizeClass; NUM_SIZE_CLASS];
 type TThreadFreeLists = [SharedFreeList; NUM_SIZE_CLASS];
@@ -54,13 +54,13 @@ struct SizeClass {
     size: usize,
     // reserved page for every size class to ensure utilization
     reserved: ReservedPage,
-    free_list: Arc<lflist::List<usize, BumpAllocator>>,
+    free_list: Arc<lflist::WordList<BumpAllocator>>,
 }
 
 struct CommonSizeClass {
     // unused up reserves from dead threads
     reserved: SegQueue<ReservedPage>,
-    free_list: lflist::List<usize, BumpAllocator>,
+    free_list: lflist::WordList<BumpAllocator>,
 }
 
 #[derive(Clone)]
@@ -70,11 +70,11 @@ struct ReservedPage {
 }
 
 struct RemoteNodeFree {
-    pending_free: Arc<lflist::List<usize, BumpAllocator>>,
+    pending_free: Arc<lflist::WordList<BumpAllocator>>,
     // sentinel_thread: thread::Thread,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 struct Object {
     tid: usize,
     tier: usize,
@@ -104,10 +104,7 @@ pub fn allocate(size: usize) -> Ptr {
                     .allocate_from_common(size_class.size, size_class_index, &node)
             }
         };
-        meta.objects.insert(
-            addr,
-            meta.object_map(size_class_index),
-        );
+        meta.objects.insert(addr, meta.object_map(size_class_index));
         return addr as Ptr;
     })
 }
@@ -169,11 +166,10 @@ pub fn size_of(ptr: Ptr) -> Option<usize> {
     let node_id = addr_numa_id(addr);
     let node_meta = &PER_NODE_META[node_id];
     node_meta.objects.refresh();
-    node_meta.objects.get(addr).map(|o| {
-        THREAD_META.with(|meta| {
-            meta.sizes[o.tier].size
-        })
-    })
+    node_meta
+        .objects
+        .get(addr)
+        .map(|o| THREAD_META.with(|meta| meta.sizes[o.tier].size))
 }
 
 #[inline]
@@ -198,7 +194,7 @@ impl ThreadMeta {
         }
     }
 
-    pub fn object_map(&self, tier: usize) -> Object{
+    pub fn object_map(&self, tier: usize) -> Object {
         Object {
             tier,
             tid: self.tid,
@@ -236,7 +232,7 @@ impl SizeClass {
         Self {
             size,
             reserved: ReservedPage::new(),
-            free_list: Arc::new(lflist::List::new()),
+            free_list: Arc::new(lflist::WordList::new()),
         }
     }
 }
@@ -303,7 +299,7 @@ impl ReservedPage {
 
 impl RemoteNodeFree {
     pub fn new(node_id: usize) -> Self {
-        let list = Arc::new(lflist::List::new());
+        let list = Arc::new(lflist::WordList::new());
         Self { pending_free: list }
     }
 
@@ -362,7 +358,7 @@ fn common_size_classes() -> TCommonSizeClasses {
     for elem in &mut data[..] {
         *elem = MaybeUninit::new(CommonSizeClass {
             reserved: SegQueue::new(),
-            free_list: lflist::List::new(),
+            free_list: lflist::WordList::new(),
         });
     }
     unsafe { mem::transmute::<_, TCommonSizeClasses>(data) }
