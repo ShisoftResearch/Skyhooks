@@ -350,27 +350,34 @@ impl<T: Default, A: Alloc + Default> BufferMeta<T, A> {
         let backoff = Backoff::new();
         let word_bits = mem::size_of::<usize>() << 3;
         let flag = 1 << (word_bits - 1);
-        {
+        loop {
             let rc = buffer.refs.load(Relaxed);
             if rc > flag {
                 // discovered other drop out, give up
                 return None;
             }
-            if buffer.refs.compare_and_swap(rc, rc | flag, Relaxed) > flag {
+            let flag_swap = buffer.refs.compare_and_swap(rc, rc | flag, Relaxed);
+            if flag_swap == rc {
+                break;
+            } else if flag_swap > flag  {
                 // discovered other drop out, give up
                 return None;
+            } else {
+                backoff.spin();
             }
         }
         loop {
             //wait until reference counter reach 2 one for not garbage one for current reference)
-            let rc = buffer.refs.load(Relaxed);
-            debug_assert!(rc > flag);
+            let rc = buffer.refs.load(SeqCst);
+            debug_assert!(rc > flag, "get reference {:x}, value {}", rc, rc & !flag);
             let rc = rc & !flag;
             if rc <= 1 {
                 // this buffer is marked to be gc, untouched
+                buffer.refs.store(2, Relaxed);
                 return Some(next_ptr);
             } else if rc == 2 {
                 // no other reference, flush and break out waiting
+                buffer.refs.store(rc, Relaxed);
                 BufferMeta::flush_buffer(&*buffer, retain);
                 BufferMeta::unref(buffer_ptr);
                 return Some(next_ptr);
