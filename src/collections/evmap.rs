@@ -82,6 +82,9 @@ impl<V: Default> Producer<V> {
     }
     #[inline]
     pub fn insert_to_cpu(&self, key: usize, value: V, cpu_id: usize) {
+        if key == 0 {
+            panic!();
+        }
         self.cache[cpu_id].exclusive_push((key, value));
     }
 }

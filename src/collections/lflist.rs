@@ -10,7 +10,7 @@ use std::intrinsics::size_of;
 use std::ops::Deref;
 use std::ptr::null_mut;
 use std::sync::atomic::Ordering::{Relaxed, SeqCst};
-use std::sync::atomic::{AtomicPtr, AtomicUsize, fence};
+use std::sync::atomic::{fence, AtomicPtr, AtomicUsize};
 
 const EMPTY_SLOT: usize = 0;
 const SENTINEL_SLOT: usize = 1;
@@ -161,7 +161,8 @@ impl<T: Default, A: Alloc + Default> List<T, A> {
                     // the side effect is not significant to its use case
                     let mut buffer_remains = vec![];
                     drop(page);
-                    let dropped_next = BufferMeta::drop_out(head_ptr, Some(&mut buffer_remains), &mut 0);
+                    let dropped_next =
+                        BufferMeta::drop_out(head_ptr, Some(&mut buffer_remains), &mut 0);
                     debug_assert_eq!(dropped_next.unwrap_or(null_mut()), next_buffer_ptr);
                     for (flag, data) in buffer_remains {
                         if flag != EMPTY_SLOT && flag != SENTINEL_SLOT {
@@ -191,7 +192,12 @@ impl<T: Default, A: Alloc + Default> List<T, A> {
                         }
                         fence(SeqCst);
                         let swapped = page.head.compare_and_swap(slot, new_slot, Relaxed);
-                        debug_assert!(swapped >= slot, "Exclusive pop failed, {} expect {}", swapped, slot);
+                        debug_assert!(
+                            swapped >= slot,
+                            "Exclusive pop failed, {} expect {}",
+                            swapped,
+                            slot
+                        );
                         if swapped != slot {
                             // Swap page head failed
                             // The only possible scenario is that there was a push for
@@ -213,8 +219,25 @@ impl<T: Default, A: Alloc + Default> List<T, A> {
         }
     }
     pub fn drop_out_all(&self, mut retain: Option<&mut Vec<(usize, T)>>) {
-        if self.count.load(Relaxed) == 0 {
+        let count = self.count.load(Relaxed);
+        if count == 0 {
             return;
+        }
+        let pop_threshold = self.buffer_cap >> 2;
+        let pop_amount = pop_threshold << 1; // double of the threshold
+        if count < pop_threshold {
+            for _ in 0..pop_amount {
+                let retain = retain.as_deref_mut();
+                if let Some(pair) = self.pop() {
+                    if let Some(retain) = retain {
+                        retain.push(pair);
+                    }
+                } else {
+                    // the only stop condition is that there is no more elements to pop
+                    // if it still not empty, continue to swap buffer approach
+                    return;
+                }
+            }
         }
         let new_head_buffer = BufferMeta::new(self.buffer_cap);
         let mut buffer_ptr = self.head.swap(new_head_buffer, Relaxed);
@@ -290,7 +313,7 @@ impl<T: Default, A: Alloc + Default> BufferMeta<T, A> {
             refs: AtomicUsize::new(1),
             upper_bound: slots_start + slots_size,
             lower_bound: slots_start,
-            total_size
+            total_size,
         };
         head_page
     }
@@ -310,7 +333,7 @@ impl<T: Default, A: Alloc + Default> BufferMeta<T, A> {
         let total_size = buffer_ref.total_size;
         if mem::needs_drop::<T>() {
             let mut objs = vec![];
-            Self::flush_buffer(buffer_ref, Some(&mut objs),  &mut 0);
+            Self::flush_buffer(buffer_ref, Some(&mut objs), &mut 0);
             for obj in objs {
                 drop(obj)
             }
@@ -326,8 +349,7 @@ impl<T: Default, A: Alloc + Default> BufferMeta<T, A> {
         let mut slot_addr = buffer.lower_bound;
         let mut obj_addr = buffer.upper_bound;
         debug_assert!(
-            buffer.refs.load(Relaxed) <= 2
-                || buffer.refs.load(Relaxed) >= 256,
+            buffer.refs.load(Relaxed) <= 2 || buffer.refs.load(Relaxed) >= 256,
             "Reference counting check failed"
         );
         for _ in 0..data_bound {
@@ -350,7 +372,11 @@ impl<T: Default, A: Alloc + Default> BufferMeta<T, A> {
         buffer.head.store(0, Relaxed);
     }
 
-    fn drop_out(buffer_ptr: *mut Self, retain: Option<&mut Vec<(usize, T)>>, counter: &mut usize) ->Option<*mut Self> {
+    fn drop_out(
+        buffer_ptr: *mut Self,
+        retain: Option<&mut Vec<(usize, T)>>,
+        counter: &mut usize,
+    ) -> Option<*mut Self> {
         let buffer = BufferMeta::borrow(buffer_ptr);
         let next_ptr = buffer.next.load(Relaxed);
         let backoff = Backoff::new();
@@ -365,7 +391,7 @@ impl<T: Default, A: Alloc + Default> BufferMeta<T, A> {
             let flag_swap = buffer.refs.compare_and_swap(rc, rc | flag, Relaxed);
             if flag_swap == rc {
                 break;
-            } else if flag_swap > flag  {
+            } else if flag_swap > flag {
                 // discovered other drop out, give up
                 return None;
             } else {
