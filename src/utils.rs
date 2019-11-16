@@ -167,6 +167,13 @@ mod test {
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering::Relaxed;
     use test::Bencher;
+    use rand::{thread_rng, SeedableRng, Rng};
+    use rand_xoshiro::Xoroshiro64StarStar;
+    use rand_xorshift::XorShiftRng;
+    use lfmap::{WordMap, Map};
+    use std::alloc::System;
+    use std::collections::HashMap;
+    use crate::collections::lflist::WordList;
 
     #[test]
     fn numa_nodes() {
@@ -225,6 +232,64 @@ mod test {
         let atomic = AtomicUsize::new(100);
         b.iter(|| {
             atomic.store(1, Relaxed);
+        });
+    }
+
+    #[bench]
+    fn random_xoshiro(b: &mut Bencher) {
+        let mut thread_rng = thread_rng();
+        let mut rng = Xoroshiro64StarStar::from_rng(&mut thread_rng).unwrap();
+        b.iter(|| {
+            rng.gen_range(0, 256);
+        });
+    }
+
+    #[bench]
+    fn random_xorshift(b: &mut Bencher) {
+        let mut thread_rng = thread_rng();
+        let mut rng = XorShiftRng::from_rng(&mut thread_rng).unwrap();
+        b.iter(|| {
+            rng.gen_range(0, 256);
+        });
+    }
+
+    #[bench]
+    fn lfmap(b: &mut Bencher) {
+        let map = WordMap::<System>::with_capacity(128);
+        let mut i = 5;
+        b.iter(|| {
+            map.insert(i, i);
+            i += 1;
+        });
+    }
+
+    #[bench]
+    fn hashmap(b: &mut Bencher) {
+        let mut map = HashMap::new();
+        let mut i = 5;
+        b.iter(|| {
+            map.insert(i, i);
+            i += 1;
+        });
+    }
+
+    #[bench]
+    fn lflist_push(b: &mut Bencher) {
+        let list = WordList::<System>::new();
+        let mut i = 5;
+        b.iter(|| {
+            list.push(i);
+            i += 1;
+        });
+    }
+
+    #[bench]
+    fn lflist_exclusive_push(b: &mut Bencher) {
+        let list = WordList::<System>::new();
+        let mut i = 5;
+        b.iter(|| {
+            list.exclusive_push(i);
+            i += 1;
         });
     }
 }

@@ -12,10 +12,16 @@ use std::ptr::null_mut;
 use std::sync::atomic::Ordering::{Relaxed, SeqCst};
 use std::sync::atomic::{fence, AtomicPtr, AtomicUsize};
 use std::borrow::{Borrow, BorrowMut};
+use std::cell::UnsafeCell;
 
 const EMPTY_SLOT: usize = 0;
 const SENTINEL_SLOT: usize = 1;
 const CACHE_LINE_SIZE: usize = 64;
+
+const ELIMINATION_EMPTY: usize = 0;
+const ELIMINATION_WAITING: usize = 1;
+const ELIMINATION_BUSY: usize = 2;
+
 
 struct BufferMeta<T: Default, A: Alloc + Default> {
     head: AtomicUsize,
@@ -25,6 +31,15 @@ struct BufferMeta<T: Default, A: Alloc + Default> {
     lower_bound: usize,
     tuple_size: usize,
     total_size: usize
+}
+
+pub struct EliminationSlot<T: Default> {
+    state: AtomicUsize,
+    data: UnsafeCell<(usize, T)>
+}
+
+pub struct EliminationArray<T: Default> {
+    slots: Vec<EliminationSlot<T>>
 }
 
 pub struct List<T: Default, A: Alloc + Default = Global> {
@@ -103,21 +118,20 @@ impl<T: Default, A: Alloc + Default> List<T, A> {
             let head_ptr = self.head.load(Relaxed);
             let page = BufferMeta::borrow(head_ptr);
             let slot_pos = page.head.load(Relaxed);
-            let next_slot = slot_pos + 1;
-            if next_slot > self.buffer_cap {
+            let next_pos = slot_pos + 1;
+            if next_pos > self.buffer_cap {
                 // buffer overflow, make new and link to last buffer
                 let new_head = BufferMeta::new(self.buffer_cap);
                 unsafe {
                     (*new_head).next.store(head_ptr, Relaxed);
                 }
-                self.head.store(new_head, Relaxed);
                 if self.head.compare_and_swap(head_ptr, new_head, Relaxed) != head_ptr {
                     BufferMeta::unref(new_head);
                 }
-            // either case, retry
+                // either case, retry
             } else {
                 let slot_ptr = page.flag_ptr_of(slot_pos);
-                page.head.store(next_slot, Relaxed);
+                page.head.store(next_pos, Relaxed);
                 unsafe {
                     if obj_size != 0 {
                         let obj_ptr = page.object_ptr_of(slot_ptr);
