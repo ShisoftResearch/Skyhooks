@@ -115,7 +115,7 @@ impl<T: Default, A: Alloc + Default> List<T, A> {
             // either case, retry
             } else {
                 let slot_ptr = (page.lower_bound + slot * mem::size_of::<usize>()) as *mut usize;
-                let obj_ptr = (page.upper_bound + slot * mem::size_of::<T>()) as *mut T;
+                let obj_ptr = (page.upper_bound + slot * obj_size) as *mut T;
                 page.head.store(next_slot, Relaxed);
                 unsafe {
                     if obj_size != 0 {
@@ -177,16 +177,16 @@ impl<T: Default, A: Alloc + Default> List<T, A> {
             if slot > 0 {
                 unsafe {
                     let new_slot = slot - 1;
-                    let slot_ptr =
+                    let new_slot_ptr =
                         (page.lower_bound + new_slot * mem::size_of::<usize>()) as *mut usize;
-                    let obj_ptr = (page.upper_bound + slot * mem::size_of::<T>()) as *mut T;
-                    let slot_flag = intrinsics::atomic_load_relaxed(slot_ptr);
-                    if slot_flag != 0
+                    let obj_ptr = (page.upper_bound + new_slot * obj_size) as *mut T;
+                    let new_slot_flag = intrinsics::atomic_load_relaxed(new_slot_ptr);
+                    if new_slot_flag != 0
                         // first things first, swap the slot to zero if it is not zero
-                        && intrinsics::atomic_cxchg_relaxed(slot_ptr, slot_flag, EMPTY_SLOT).1
+                        && intrinsics::atomic_cxchg_relaxed(new_slot_ptr, new_slot_flag, EMPTY_SLOT).1
                     {
-                        res = Some((slot_flag, T::default()));
-                        if obj_size != 0 && slot_flag != SENTINEL_SLOT {
+                        res = Some((new_slot_flag, T::default()));
+                        if obj_size != 0 && new_slot_flag != SENTINEL_SLOT {
                             res.as_mut()
                                 .map(|(_, obj)| *obj = unsafe { ptr::read(obj_ptr as *mut T) });
                         }
@@ -204,9 +204,9 @@ impl<T: Default, A: Alloc + Default> List<T, A> {
                             // pop will back off if flag is detected as zero
                             // In this case, we have a hole in the list, should indicate pop that
                             // this slot does not have any useful information, should pop again
-                            intrinsics::atomic_store(slot_ptr, SENTINEL_SLOT);
+                            intrinsics::atomic_store(new_slot_ptr, SENTINEL_SLOT);
                         }
-                        if slot_flag != SENTINEL_SLOT {
+                        if new_slot_flag != SENTINEL_SLOT {
                             self.count.fetch_sub(1, Relaxed);
                             return res;
                         }
@@ -502,7 +502,7 @@ impl<T: Default, A: Alloc + Default> ObjectList<T, A> {
     pub fn exclusive_push(&self, data: T) {
         self.inner.exclusive_push(!0, data)
     }
-    pub fn pop(&self, data: usize) -> Option<T> {
+    pub fn pop(&self) -> Option<T> {
         self.inner.pop().map(|(_, obj)| obj)
     }
 
@@ -549,9 +549,14 @@ mod test {
     }
 
     #[test]
+    pub fn parallel_insertion() {
+
+    }
+
+    #[test]
     pub fn parallel() {
         let page_size = *SYS_PAGE_SIZE;
-        let list = Arc::new(WordList::<Global>::with_capacity(64));
+        let list = Arc::new(ObjectList::<usize,Global>::with_capacity(64));
         let mut threads = (2..page_size)
             .map(|i| {
                 let list = list.clone();
@@ -569,6 +574,8 @@ mod test {
             counter += 1;
         }
         assert_eq!(counter, page_size - 2);
+
+        // push is fine
 
         for i in 2..page_size {
             list.push(i);
