@@ -14,6 +14,7 @@ use std::sync::atomic::{fence, AtomicPtr, AtomicUsize};
 
 const EMPTY_SLOT: usize = 0;
 const SENTINEL_SLOT: usize = 1;
+const CACHE_LINE_SIZE: usize = 64;
 
 struct BufferMeta<T: Default, A: Alloc + Default> {
     head: AtomicUsize,
@@ -21,7 +22,8 @@ struct BufferMeta<T: Default, A: Alloc + Default> {
     refs: AtomicUsize,
     upper_bound: usize,
     lower_bound: usize,
-    total_size: usize,
+    tuple_size: usize,
+    total_size: usize
 }
 
 pub struct List<T: Default, A: Alloc + Default = Global> {
@@ -73,11 +75,10 @@ impl<T: Default, A: Alloc + Default> List<T, A> {
                 // Note that zero in the slot indicates not complete on pop, then pop
                 // will back off and try again
                 if page.head.compare_and_swap(slot_pos, next_pos, Relaxed) == slot_pos {
-                    let slot_ptr =
-                        (page.lower_bound + slot_pos * mem::size_of::<usize>()) as *mut usize;
-                    let obj_ptr = (page.upper_bound + slot_pos * obj_size) as *mut T;
+                    let slot_ptr = page.flag_ptr_of(slot_pos);
                     unsafe {
                         if obj_size != 0 {
+                            let obj_ptr = page.object_ptr_of(slot_ptr);
                             ptr::write(obj_ptr, data);
                         }
                         fence(SeqCst);
@@ -100,8 +101,8 @@ impl<T: Default, A: Alloc + Default> List<T, A> {
         loop {
             let head_ptr = self.head.load(Relaxed);
             let page = BufferMeta::borrow(head_ptr);
-            let slot = page.head.load(Relaxed);
-            let next_slot = slot + 1;
+            let slot_pos = page.head.load(Relaxed);
+            let next_slot = slot_pos + 1;
             if next_slot > self.buffer_cap {
                 // buffer overflow, make new and link to last buffer
                 let new_head = BufferMeta::new(self.buffer_cap);
@@ -114,11 +115,11 @@ impl<T: Default, A: Alloc + Default> List<T, A> {
                 }
             // either case, retry
             } else {
-                let slot_ptr = (page.lower_bound + slot * mem::size_of::<usize>()) as *mut usize;
-                let obj_ptr = (page.upper_bound + slot * obj_size) as *mut T;
+                let slot_ptr = page.flag_ptr_of(slot_pos);
                 page.head.store(next_slot, Relaxed);
                 unsafe {
                     if obj_size != 0 {
+                        let obj_ptr = page.object_ptr_of(slot_ptr);
                         ptr::write(obj_ptr, data);
                     }
                     intrinsics::atomic_store_relaxed(slot_ptr, flag);
@@ -177,9 +178,7 @@ impl<T: Default, A: Alloc + Default> List<T, A> {
             if slot > 0 {
                 unsafe {
                     let new_slot = slot - 1;
-                    let new_slot_ptr =
-                        (page.lower_bound + new_slot * mem::size_of::<usize>()) as *mut usize;
-                    let obj_ptr = (page.upper_bound + new_slot * obj_size) as *mut T;
+                    let new_slot_ptr = page.flag_ptr_of(new_slot);
                     let new_slot_flag = intrinsics::atomic_load_relaxed(new_slot_ptr);
                     if new_slot_flag != 0
                         // first things first, swap the slot to zero if it is not zero
@@ -188,7 +187,10 @@ impl<T: Default, A: Alloc + Default> List<T, A> {
                         res = Some((new_slot_flag, T::default()));
                         if obj_size != 0 && new_slot_flag != SENTINEL_SLOT {
                             res.as_mut()
-                                .map(|(_, obj)| *obj = unsafe { ptr::read(obj_ptr as *mut T) });
+                                .map(|(_, obj)| unsafe {
+                                    let obj_ptr = page.object_ptr_of(new_slot_ptr) as *mut T;
+                                    *obj =  ptr::read(obj_ptr as *mut T)
+                                });
                         }
                         fence(SeqCst);
                         let swapped = page.head.compare_and_swap(slot, new_slot, Relaxed);
@@ -300,20 +302,28 @@ impl<T: Default, A: Alloc + Default> Drop for List<T, A> {
 
 impl<T: Default, A: Alloc + Default> BufferMeta<T, A> {
     pub fn new(buffer_cap: usize) -> *mut BufferMeta<T, A> {
-        let meta_size = mem::size_of::<Self>();
-        let slots_size = buffer_cap * mem::size_of::<usize>();
-        let data_size = buffer_cap * mem::size_of::<T>();
-        let total_size = meta_size + slots_size + data_size;
+        let self_size = mem::size_of::<Self>();
+        let meta_size = self_size + align_padding(self_size, CACHE_LINE_SIZE);
+        let slots_size = mem::size_of::<usize>();
+        let data_size = mem::size_of::<T>();
+        let tuple_size = slots_size + data_size;
+        let tuple_size_aligned =
+            if tuple_size <= 8 { 8 }
+            else if tuple_size <= 16 { 16 }
+            else if tuple_size <= 32 { 32 }
+            else { tuple_size + align_padding(tuple_size, CACHE_LINE_SIZE) };
+        let total_size = meta_size + tuple_size_aligned * buffer_cap;
         let head_page = alloc_mem::<T, A>(total_size) as *mut Self;
-        let head_page_address = head_page as usize;
-        let slots_start = head_page_address + meta_size;
+        let head_page_addr = head_page as usize;
+        let slots_start = head_page_addr + meta_size;
         *(unsafe { &mut *head_page }) = Self {
             head: AtomicUsize::new(0),
             next: AtomicPtr::new(null_mut()),
             refs: AtomicUsize::new(1),
-            upper_bound: slots_start + slots_size,
+            upper_bound: head_page_addr + total_size,
             lower_bound: slots_start,
-            total_size,
+            tuple_size,
+            total_size
         };
         head_page
     }
@@ -347,7 +357,6 @@ impl<T: Default, A: Alloc + Default> BufferMeta<T, A> {
         let size_of_obj = mem::size_of::<T>();
         let data_bound = buffer.head.load(Relaxed);
         let mut slot_addr = buffer.lower_bound;
-        let mut obj_addr = buffer.upper_bound;
         debug_assert!(
             buffer.refs.load(Relaxed) <= 2 || buffer.refs.load(Relaxed) >= 256,
             "Reference counting check failed"
@@ -358,7 +367,7 @@ impl<T: Default, A: Alloc + Default> BufferMeta<T, A> {
                 if slot != EMPTY_SLOT && slot != SENTINEL_SLOT {
                     let mut rest = (slot, T::default());
                     if size_of_obj > 0 {
-                        rest.1 = ptr::read(obj_addr as *const T);
+                        rest.1 = ptr::read((slot_addr + mem::size_of::<usize>()) as *const T);
                     }
                     if let Some(ref mut res) = retain {
                         res.push(rest);
@@ -366,8 +375,7 @@ impl<T: Default, A: Alloc + Default> BufferMeta<T, A> {
                     *counter += 1;
                 }
             }
-            slot_addr += mem::size_of::<usize>();
-            obj_addr += mem::size_of::<T>();
+            slot_addr += buffer.tuple_size;
         }
         buffer.head.store(0, Relaxed);
     }
@@ -424,6 +432,14 @@ impl<T: Default, A: Alloc + Default> BufferMeta<T, A> {
             buffer.refs.fetch_add(1, Relaxed);
         }
         BufferRef { ptr: buffer }
+    }
+
+    fn flag_ptr_of(&self, index: usize) -> *mut usize {
+        (self.lower_bound + index * self.tuple_size) as *mut usize
+    }
+
+    fn object_ptr_of(&self, flag_ptr: *mut usize) -> *mut T {
+        (flag_ptr as usize + mem::size_of::<usize>()) as *mut T
     }
 }
 
