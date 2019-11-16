@@ -500,7 +500,7 @@ impl<T: Default, A: Alloc + Default> ObjectList<T, A> {
         self.inner.push(!0, data)
     }
     pub fn exclusive_push(&self, data: T) {
-        self.inner.exclusive_push(!0, data)
+        self.inner.push(!0, data)
     }
     pub fn pop(&self) -> Option<T> {
         self.inner.pop().map(|(_, obj)| obj)
@@ -544,7 +544,7 @@ mod test {
         assert_eq!(list.count(), 2);
         let mut dropped = vec![];
         list.drop_out_all(Some(&mut dropped));
-        assert_eq!(dropped, vec![(32, ()), (25, ())]);
+        assert_eq!(dropped, vec![(25, ()), (32, ())]);
         assert_eq!(list.count(), 0);
     }
 
