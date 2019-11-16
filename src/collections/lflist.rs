@@ -456,7 +456,7 @@ impl<A: Alloc + Default> WordList<A> {
         }
     }
     pub fn new() -> Self {
-        Self::with_capacity(256)
+        Self::with_capacity(512)
     }
     pub fn push(&self, data: usize) {
         debug_assert_ne!(data, 0);
@@ -494,7 +494,7 @@ impl<T: Default, A: Alloc + Default> ObjectList<T, A> {
         }
     }
     pub fn new() -> Self {
-        Self::with_capacity(256)
+        Self::with_capacity(512)
     }
     pub fn push(&self, data: T) {
         self.inner.push(!0, data)
