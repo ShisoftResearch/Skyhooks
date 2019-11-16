@@ -500,7 +500,7 @@ impl<T: Default, A: Alloc + Default> ObjectList<T, A> {
         self.inner.push(!0, data)
     }
     pub fn exclusive_push(&self, data: T) {
-        self.inner.push(!0, data)
+        self.inner.exclusive_push(!0, data)
     }
     pub fn pop(&self) -> Option<T> {
         self.inner.pop().map(|(_, obj)| obj)

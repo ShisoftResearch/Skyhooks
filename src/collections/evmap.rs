@@ -85,6 +85,6 @@ impl<V: Default> Producer<V> {
         if key == 0 {
             panic!();
         }
-        self.cache[cpu_id].exclusive_push((key, value));
+        self.cache[cpu_id].push((key, value));
     }
 }
