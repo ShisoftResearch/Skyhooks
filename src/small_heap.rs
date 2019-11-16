@@ -303,11 +303,9 @@ impl RemoteNodeFree {
     }
 
     pub fn free_all(&self) {
-        let mut to_free_vec = vec![];
-        self.pending_free.drop_out_all(Some(&mut to_free_vec));
-        for (addr, _) in to_free_vec {
+        self.pending_free.drop_out_all(Some(|(addr, _)| {
             free(addr as Ptr);
-        }
+        }));
     }
 }
 

@@ -11,6 +11,7 @@ use std::ops::Deref;
 use std::ptr::null_mut;
 use std::sync::atomic::Ordering::{Relaxed, SeqCst};
 use std::sync::atomic::{fence, AtomicPtr, AtomicUsize};
+use std::borrow::{Borrow, BorrowMut};
 
 const EMPTY_SLOT: usize = 0;
 const SENTINEL_SLOT: usize = 1;
@@ -160,16 +161,14 @@ impl<T: Default, A: Alloc + Default> List<T, A> {
                     // and check head to put back remaining items into the list
                     // This approach may break ordering but we have no other choice here and
                     // the side effect is not significant to its use case
-                    let mut buffer_remains = vec![];
                     drop(page);
                     let dropped_next =
-                        BufferMeta::drop_out(head_ptr, Some(&mut buffer_remains), &mut 0);
+                        BufferMeta::drop_out(head_ptr, &mut Some(|(flag, data)| {
+                            if flag != EMPTY_SLOT && flag != SENTINEL_SLOT {
+                                self.do_push(flag, data); // push without bump counter
+                            }
+                        }), &mut 0);
                     debug_assert_eq!(dropped_next.unwrap_or(null_mut()), next_buffer_ptr);
-                    for (flag, data) in buffer_remains {
-                        if flag != EMPTY_SLOT && flag != SENTINEL_SLOT {
-                            self.do_push(flag, data); // push without bump counter
-                        }
-                    }
                     // don't need to unref here for drop out did this for us
                 }
                 continue;
@@ -220,19 +219,19 @@ impl<T: Default, A: Alloc + Default> List<T, A> {
             backoff.spin();
         }
     }
-    pub fn drop_out_all(&self, mut retain: Option<&mut Vec<(usize, T)>>) {
+    pub fn drop_out_all<F>(&self, mut retain: Option<F>) where F: FnMut((usize, T)) {
         let count = self.count.load(Relaxed);
         if count == 0 {
             return;
         }
         let pop_threshold = self.buffer_cap >> 2;
         let pop_amount = pop_threshold << 1; // double of the threshold
+        let retain = retain.borrow_mut();
         if count < pop_threshold {
             for _ in 0..pop_amount {
-                let retain = retain.as_deref_mut();
                 if let Some(pair) = self.pop() {
                     if let Some(retain) = retain {
-                        retain.push(pair);
+                        retain(pair);
                     }
                 } else {
                     // the only stop condition is that there is no more elements to pop
@@ -246,7 +245,6 @@ impl<T: Default, A: Alloc + Default> List<T, A> {
         let null = null_mut();
         let mut counter = 0;
         'main: while buffer_ptr != null {
-            let mut retain = retain.as_deref_mut();
             buffer_ptr = BufferMeta::drop_out(buffer_ptr, retain, &mut counter).unwrap_or(null);
         }
         self.count.fetch_sub(counter, Relaxed);
@@ -342,18 +340,14 @@ impl<T: Default, A: Alloc + Default> BufferMeta<T, A> {
         let buffer_ref = unsafe { &*buffer };
         let total_size = buffer_ref.total_size;
         if mem::needs_drop::<T>() {
-            let mut objs = vec![];
-            Self::flush_buffer(buffer_ref, Some(&mut objs), &mut 0);
-            for obj in objs {
-                drop(obj)
-            }
+            Self::flush_buffer(buffer_ref, &mut Some(|x| drop(x)), &mut 0);
         }
         dealloc_mem::<T, A>(buffer as usize, total_size)
     }
 
     // only use when the buffer is about to be be dead
     // this require reference checking
-    fn flush_buffer(buffer: &Self, mut retain: Option<&mut Vec<(usize, T)>>, counter: &mut usize) {
+    fn flush_buffer<F>(buffer: &Self, retain: &mut Option<F>, counter: &mut usize) where F: FnMut((usize, T)) {
         let size_of_obj = mem::size_of::<T>();
         let data_bound = buffer.head.load(Relaxed);
         let mut slot_addr = buffer.lower_bound;
@@ -369,8 +363,8 @@ impl<T: Default, A: Alloc + Default> BufferMeta<T, A> {
                     if size_of_obj > 0 {
                         rest.1 = ptr::read((slot_addr + mem::size_of::<usize>()) as *const T);
                     }
-                    if let Some(ref mut res) = retain {
-                        res.push(rest);
+                    if let Some(retain) = retain {
+                        retain(rest);
                     }
                     *counter += 1;
                 }
@@ -380,11 +374,11 @@ impl<T: Default, A: Alloc + Default> BufferMeta<T, A> {
         buffer.head.store(0, Relaxed);
     }
 
-    fn drop_out(
+    fn drop_out<F>(
         buffer_ptr: *mut Self,
-        retain: Option<&mut Vec<(usize, T)>>,
+        retain: &mut Option<F>,
         counter: &mut usize,
-    ) -> Option<*mut Self> {
+    ) -> Option<*mut Self> where F: FnMut((usize, T)) {
         let buffer = BufferMeta::borrow(buffer_ptr);
         let next_ptr = buffer.next.load(Relaxed);
         let backoff = Backoff::new();
@@ -488,7 +482,7 @@ impl<A: Alloc + Default> WordList<A> {
         self.inner.pop().map(|(data, _)| data)
     }
 
-    pub fn drop_out_all(&self, retain: Option<&mut Vec<(usize, ())>>) {
+    pub fn drop_out_all<F>(&self, retain: Option<F>) where F: FnMut((usize, ()))  {
         self.inner.drop_out_all(retain);
     }
     pub fn prepend_with(&self, other: &Self) {
@@ -522,7 +516,7 @@ impl<T: Default, A: Alloc + Default> ObjectList<T, A> {
         self.inner.pop().map(|(_, obj)| obj)
     }
 
-    pub fn drop_out_all(&self, retain: Option<&mut Vec<(usize, T)>>) {
+    pub fn drop_out_all<F>(&self, retain: Option<F>) where F: Fn((usize, T)) {
         self.inner.drop_out_all(retain)
     }
 
@@ -559,7 +553,7 @@ mod test {
         list.push(25);
         assert_eq!(list.count(), 2);
         let mut dropped = vec![];
-        list.drop_out_all(Some(&mut dropped));
+        list.drop_out_all(Some(|x| { dropped.push(x); }));
         assert_eq!(dropped, vec![(25, ()), (32, ())]);
         assert_eq!(list.count(), 0);
     }

@@ -43,13 +43,11 @@ impl<V: Clone + Default> EvMap<V> {
 
     pub fn refresh(&self) {
         // get all items from producers and insert into the local map
-        let mut dropped = vec![];
         self.source.iter().for_each(|p| {
-            p.drop_out_all(Some(&mut dropped));
+            p.drop_out_all(Some(|(_, (k, v))| {
+                self.map.insert(k, v);
+            }));
         });
-        for (_, (k, v)) in dropped {
-            self.map.insert(k, v);
-        }
     }
 
     #[inline]
