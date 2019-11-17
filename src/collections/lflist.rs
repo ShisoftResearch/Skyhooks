@@ -13,14 +13,19 @@ use std::sync::atomic::Ordering::{Relaxed, SeqCst};
 use std::sync::atomic::{fence, AtomicPtr, AtomicUsize};
 use std::borrow::{Borrow, BorrowMut};
 use std::cell::UnsafeCell;
+use crossbeam::atomic::AtomicCell;
+use std::hint::unreachable_unchecked;
 
 const EMPTY_SLOT: usize = 0;
 const SENTINEL_SLOT: usize = 1;
 const CACHE_LINE_SIZE: usize = 64;
 
-const ELIMINATION_EMPTY: usize = 0;
-const ELIMINATION_WAITING: usize = 1;
-const ELIMINATION_BUSY: usize = 2;
+const EXCHANGE_EMPTY: usize = 0;
+const EXCHANGE_WAITING: usize = 1;
+const EXCHANGE_BUSY: usize = 2;
+const EXCHANGE_SPIN_CYCLES: usize = 1000;
+
+type ExchangeData<T> = Option<(usize, T)>;
 
 
 struct BufferMeta<T: Default, A: Alloc + Default> {
@@ -33,13 +38,19 @@ struct BufferMeta<T: Default, A: Alloc + Default> {
     total_size: usize
 }
 
-pub struct EliminationSlot<T: Default> {
-    state: AtomicUsize,
-    data: UnsafeCell<(usize, T)>
+enum ExchangeDataState<T> {
+    Empty,
+    Waiting(ExchangeData<T>),
+    Busy(ExchangeData<T>)
 }
 
-pub struct EliminationArray<T: Default> {
-    slots: Vec<EliminationSlot<T>>
+pub struct ExchangeSlot<T: Default> {
+    state: AtomicUsize,
+    data: UnsafeCell<ExchangeDataState<T>>
+}
+
+pub struct ExchangeArray<T: Default> {
+    slots: Vec<ExchangeSlot<T>>
 }
 
 pub struct List<T: Default, A: Alloc + Default = Global> {
@@ -539,6 +550,86 @@ impl<T: Default, A: Alloc + Default> ObjectList<T, A> {
     }
     pub fn count(&self) -> usize {
         self.inner.count()
+    }
+}
+
+impl <T: Default> ExchangeSlot<T> {
+    fn new() -> Self {
+        Self {
+            state: AtomicUsize::new(EXCHANGE_EMPTY),
+            data: UnsafeCell::new(ExchangeDataState::Empty)
+        }
+    }
+
+    fn exchange(&self, mut data: ExchangeData<T>) -> Option<ExchangeData<T>> {
+        let state = self.state.load(Relaxed);
+        let backoff = Backoff::new();
+        unsafe {
+            let data_state_ptr = self.data.get();
+            let mut data_state_mut = &mut (*data_state_ptr);
+            if state == EXCHANGE_EMPTY {
+                if self.state.compare_and_swap(EXCHANGE_EMPTY, EXCHANGE_WAITING, Relaxed) == EXCHANGE_EMPTY {
+                    *data_state_mut = ExchangeDataState::Waiting(data);
+                    for _ in 0..EXCHANGE_SPIN_CYCLES {
+                        if self.state.load(Relaxed) == EXCHANGE_BUSY {
+                            // other thread accepted
+                            debug_assert!(!data_state_mut.is_empty());
+                            while data_state_mut.is_waiting() {
+                                debug_assert!(!data_state_mut.is_empty());
+                                fence(SeqCst);
+                                backoff.spin();
+                            } // wait for data to be written
+                            debug_assert!(data_state_mut.is_busy());
+                            let mut data_result = ExchangeDataState::Empty;
+                            mem::swap(&mut data_result, data_state_mut);
+                            self.state.store(EXCHANGE_EMPTY, Relaxed);
+                            if let ExchangeDataState::Busy(res) = data_result {
+                                return Some(res)
+                            } else {
+                                unreachable!();
+                            }
+                        }
+                        backoff.spin();
+                    }
+                } else {
+                    debug_assert!(data_state_mut.is_empty());
+                    return None
+                }
+            } else if state == EXCHANGE_WAITING {
+                // find a pair, get it first
+                if self.state.compare_and_swap(EXCHANGE_WAITING, EXCHANGE_BUSY, Relaxed) == EXCHANGE_WAITING {
+                    debug_assert!(data_state_mut.is_waiting());
+                    *data_state_mut = ExchangeDataState::Busy(data);
+                } else {
+                    return None;
+                }
+            } else if state == EXCHANGE_BUSY {
+                return None;
+            }
+        }
+        unreachable!()
+    }
+}
+
+impl <T>ExchangeDataState<T> {
+    fn is_empty(&self) -> bool {
+        match self {
+            ExchangeDataState::Empty => true,
+            _ => false
+        }
+    }
+
+    fn is_waiting(&self) -> bool {
+        match self {
+            ExchangeDataState::Waiting(_) => true,
+            _ => false
+        }
+    }
+    fn is_busy(&self) -> bool {
+        match self {
+            ExchangeDataState::Busy(_) => true,
+            _ => false
+        }
     }
 }
 
