@@ -238,8 +238,8 @@ mod test {
     #[bench]
     fn random_xoshiro(b: &mut Bencher) {
         let mut thread_rng = thread_rng();
-        let mut rng = Xoroshiro64StarStar::from_rng(&mut thread_rng).unwrap();
         b.iter(|| {
+            let mut rng = Xoroshiro64StarStar::from_rng(&mut thread_rng).unwrap();
             rng.gen_range(0, 256);
         });
     }

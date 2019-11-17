@@ -7,14 +7,17 @@ use core::{intrinsics, mem};
 use crossbeam::utils::Backoff;
 use std::alloc::Global;
 use std::intrinsics::size_of;
-use std::ops::Deref;
+use std::ops::{Deref, Add};
 use std::ptr::null_mut;
 use std::sync::atomic::Ordering::{Relaxed, SeqCst};
 use std::sync::atomic::{fence, AtomicPtr, AtomicUsize};
 use std::borrow::{Borrow, BorrowMut};
-use std::cell::UnsafeCell;
+use std::cell::{UnsafeCell, Cell};
 use crossbeam::atomic::AtomicCell;
 use std::hint::unreachable_unchecked;
+use rand_xoshiro::Xoroshiro64StarStar;
+use std::mem::transmute;
+use rand::prelude::*;
 
 const EMPTY_SLOT: usize = 0;
 const SENTINEL_SLOT: usize = 1;
@@ -57,6 +60,10 @@ pub struct List<T: Default, A: Alloc + Default = Global> {
     head: AtomicPtr<BufferMeta<T, A>>,
     count: AtomicUsize,
     buffer_cap: usize,
+}
+
+pub struct ThreadLocalRand {
+    num: Cell<usize>
 }
 
 impl<T: Default, A: Alloc + Default> List<T, A> {
@@ -591,6 +598,7 @@ impl <T: Default> ExchangeSlot<T> {
                         }
                         backoff.spin();
                     }
+                    return None;
                 } else {
                     debug_assert!(data_state_mut.is_empty());
                     return None
@@ -605,7 +613,11 @@ impl <T: Default> ExchangeSlot<T> {
                     debug_assert!(data_state_mut.is_waiting());
                     let mut data_result = ExchangeDataState::Busy(data);
                     mem::swap(&mut data_result, data_state_mut);
-                    return data_result;
+                    if let ExchangeDataState::Waiting(res) = data_result {
+                        return Some(res)
+                    } else {
+                        unreachable!()
+                    }
                 } else {
                     return None;
                 }
@@ -615,6 +627,45 @@ impl <T: Default> ExchangeSlot<T> {
                 unreachable!()
             }
         }
+    }
+}
+
+thread_local! {
+    static RND: ThreadLocalRand = ThreadLocalRand::new();
+}
+
+impl ThreadLocalRand {
+    pub fn new() -> Self {
+        let mut thread_rng = thread_rng();
+        let num = Cell::new(thread_rng.gen());
+        Self { num }
+    }
+
+    pub fn rand(&self, start: usize, end: usize) -> usize {
+        let seed_num = self.num.get();
+        let seed = unsafe { transmute(seed_num) };
+        self.num.set(seed_num.wrapping_add(1));
+        let mut rng = Xoroshiro64StarStar::from_seed(seed);
+        rng.gen_range(start, end)
+    }
+}
+
+impl <T: Default> ExchangeArray <T> {
+    pub fn new() -> Self {
+        Self::with_capacity(*NUM_CPU >> 2)
+    }
+
+    pub fn with_capacity(size: usize) -> Self {
+        Self {
+            slots: (0..size).map(|_| {
+                ExchangeSlot::new()
+            }).collect()
+        }
+    }
+
+    pub fn exchange(&self, data: ExchangeData<T>) -> Option<ExchangeData<T>> {
+        let slot_num = RND.with(|r| r.rand(0, self.slots.len()));
+        self.slots[slot_num].exchange(data)
     }
 }
 
