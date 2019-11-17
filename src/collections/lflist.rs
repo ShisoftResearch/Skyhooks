@@ -607,9 +607,10 @@ impl <T: Default> ExchangeSlot<T> {
                 }
             } else if state == EXCHANGE_BUSY {
                 return None;
+            } else {
+                unreachable!()
             }
         }
-        unreachable!()
     }
 }
 
