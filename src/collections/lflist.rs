@@ -599,7 +599,9 @@ impl <T: Default> ExchangeSlot<T> {
                 // find a pair, get it first
                 if self.state.compare_and_swap(EXCHANGE_WAITING, EXCHANGE_BUSY, Relaxed) == EXCHANGE_WAITING {
                     debug_assert!(data_state_mut.is_waiting());
-                    *data_state_mut = ExchangeDataState::Busy(data);
+                    let mut data_result = ExchangeDataState::Busy(data);
+                    mem::swap(&mut data_result, data_state_mut);
+                    return data_result;
                 } else {
                     return None;
                 }
