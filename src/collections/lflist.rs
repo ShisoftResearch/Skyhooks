@@ -609,24 +609,24 @@ impl <T: Default + Copy> ExchangeSlot<T> {
     fn exchange(&self, mut data: ExchangeData<T>) -> Result<ExchangeData<T>, ExchangeData<T>> {
         // Memory ordering is somehow important here
         // Will use SeqCst combine with fence for all operations
-        let state = self.state.load(SeqCst);
+        let state = self.state.load(Relaxed);
         let backoff = Backoff::new();
         let origin_data_flag = data.as_ref().map(|(f, _)| *f);
         if state == EXCHANGE_EMPTY {
             while !self.data.load().is_empty() {
                 // waiting for data to be cleared
             }
-            if self.state.compare_and_swap(EXCHANGE_EMPTY, EXCHANGE_WAITING, SeqCst) == EXCHANGE_EMPTY {
+            if self.state.compare_and_swap(EXCHANGE_EMPTY, EXCHANGE_WAITING, Relaxed) == EXCHANGE_EMPTY {
                 self.data.store(ExchangeDataState::Waiting(data));
                 let mut wait_counting = 0;
                 loop {
                     // check if it can spin
                     if wait_counting < EXCHANGE_SPIN_CYCLES
                         // if not, CAS to empty, can fail by other thread set BUSY
-                        || self.state.compare_and_swap(EXCHANGE_WAITING, EXCHANGE_EMPTY, SeqCst) == EXCHANGE_BUSY
+                        || self.state.compare_and_swap(EXCHANGE_WAITING, EXCHANGE_EMPTY, Relaxed) == EXCHANGE_BUSY
                     {
                         wait_counting += 1;
-                        if self.state.load(SeqCst) != EXCHANGE_BUSY {
+                        if self.state.load(Relaxed) != EXCHANGE_BUSY {
                             continue;
                         }
                         debug_assert!(!self.data.load().is_empty());
@@ -635,7 +635,7 @@ impl <T: Default + Copy> ExchangeSlot<T> {
                         } // wait for data to be written
                         debug_assert!(self.data.load().is_busy());
                         let data_result = self.data.swap(ExchangeDataState::Empty);
-                        self.state.store(EXCHANGE_EMPTY, SeqCst);
+                        self.state.store(EXCHANGE_EMPTY, Relaxed);
                         if let ExchangeDataState::Busy(res) = data_result {
                             return Ok(res);
                         } else {
@@ -643,7 +643,7 @@ impl <T: Default + Copy> ExchangeSlot<T> {
                         }
                     } else {
                         // no other thead come and take over, return input
-                        assert_eq!(self.state.load(SeqCst), EXCHANGE_EMPTY, "Bad state after bail");
+                        assert_eq!(self.state.load(Relaxed), EXCHANGE_EMPTY, "Bad state after bail");
                         let returned_data_state =  self.data.swap(ExchangeDataState::Empty);
                         if let ExchangeDataState::Waiting(returned_data) = returned_data_state {
                             assert_eq!(returned_data.as_ref().map(|(f, _)| *f), origin_data_flag);
