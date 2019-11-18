@@ -116,9 +116,11 @@ impl<T: Default, A: Alloc + Default> List<T, A> {
                             ptr::write(obj_ptr, data);
                         }
                         fence(SeqCst);
+                        let slot_flag = intrinsics::atomic_cxchg_relaxed(slot_ptr, EMPTY_SLOT, flag).0;
                         assert_eq!(
-                            intrinsics::atomic_cxchg_relaxed(slot_ptr, EMPTY_SLOT, flag).0,
-                            EMPTY_SLOT
+                            slot_flag,
+                            EMPTY_SLOT,
+                            "Cannot swap flag for push. Flag is {} expect empty", slot_flag
                         );
                     }
                     return;
@@ -568,18 +570,31 @@ impl <T: Default> ExchangeSlot<T> {
         }
     }
 
-    fn exchange(&self, mut data: ExchangeData<T>) -> Option<ExchangeData<T>> {
+    fn exchange(&self, mut data: ExchangeData<T>) -> Result<ExchangeData<T>, ExchangeData<T>> {
         let state = self.state.load(Relaxed);
         let backoff = Backoff::new();
         unsafe {
             let data_state_ptr = self.data.get();
             let mut data_state_mut = &mut (*data_state_ptr);
             if state == EXCHANGE_EMPTY {
+                while !data_state_mut.is_empty() {
+                    // waiting for data to be cleared
+                    fence(SeqCst);
+                    backoff.spin();
+                }
                 if self.state.compare_and_swap(EXCHANGE_EMPTY, EXCHANGE_WAITING, Relaxed) == EXCHANGE_EMPTY {
                     *data_state_mut = ExchangeDataState::Waiting(data);
-                    for _ in 0..EXCHANGE_SPIN_CYCLES {
-                        if self.state.load(Relaxed) == EXCHANGE_BUSY {
-                            // other thread accepted
+                    let mut wait_counting = 0;
+                    loop {
+                        // check if it can spin
+                        if wait_counting < EXCHANGE_SPIN_CYCLES
+                            // if not, CAS to empty, can fail by other thread set BUSY
+                            || self.state.compare_and_swap(EXCHANGE_WAITING, EXCHANGE_EMPTY, Relaxed) == EXCHANGE_BUSY
+                        {
+                            wait_counting += 1;
+                            if self.state.load(Relaxed) != EXCHANGE_BUSY {
+                                continue;
+                            }
                             debug_assert!(!data_state_mut.is_empty());
                             while data_state_mut.is_waiting() {
                                 debug_assert!(!data_state_mut.is_empty());
@@ -591,17 +606,25 @@ impl <T: Default> ExchangeSlot<T> {
                             mem::swap(&mut data_result, data_state_mut);
                             self.state.store(EXCHANGE_EMPTY, Relaxed);
                             if let ExchangeDataState::Busy(res) = data_result {
-                                return Some(res)
+                                return Ok(res);
                             } else {
                                 unreachable!();
+                            }
+                        } else {
+                            // no other thead come and take over, return input
+                            let mut data = ExchangeDataState::Empty;
+                            mem::swap(&mut data, data_state_mut);
+                            if let ExchangeDataState::Waiting(data) = data {
+                                return Err(data);
+                            } else {
+                                unreachable!()
                             }
                         }
                         backoff.spin();
                     }
-                    return None;
                 } else {
                     debug_assert!(data_state_mut.is_empty());
-                    return None
+                    return Err(data);
                 }
             } else if state == EXCHANGE_WAITING {
                 // find a pair, get it first
@@ -614,21 +637,24 @@ impl <T: Default> ExchangeSlot<T> {
                     let mut data_result = ExchangeDataState::Busy(data);
                     mem::swap(&mut data_result, data_state_mut);
                     if let ExchangeDataState::Waiting(res) = data_result {
-                        return Some(res)
+                        return Ok(res);
                     } else {
                         unreachable!()
                     }
                 } else {
-                    return None;
+                    return Err(data);
                 }
             } else if state == EXCHANGE_BUSY {
-                return None;
+                return Err(data);
             } else {
                 unreachable!()
             }
         }
     }
 }
+
+unsafe impl <T: Default> Sync for ExchangeSlot<T> {}
+unsafe impl <T: Default> Send for ExchangeSlot<T> {}
 
 thread_local! {
     static RND: ThreadLocalRand = ThreadLocalRand::new();
@@ -663,7 +689,7 @@ impl <T: Default> ExchangeArray <T> {
         }
     }
 
-    pub fn exchange(&self, data: ExchangeData<T>) -> Option<ExchangeData<T>> {
+    pub fn exchange(&self, data: ExchangeData<T>) -> Result<ExchangeData<T>, ExchangeData<T>> {
         let slot_num = RND.with(|r| r.rand(0, self.slots.len()));
         self.slots[slot_num].exchange(data)
     }
@@ -696,8 +722,10 @@ mod test {
     use crate::collections::lflist::*;
     use crate::utils::SYS_PAGE_SIZE;
     use std::alloc::Global;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
     use std::thread;
+    use std::collections::BTreeSet;
+    use std::sync::atomic::Ordering::Relaxed;
 
     #[test]
     pub fn general() {
@@ -786,5 +814,45 @@ mod test {
         agg.sort();
         agg.dedup_by_key(|k| *k);
         assert_eq!(agg.len(), total_insertion, "unmatch after dedup");
+    }
+
+    #[test]
+    pub fn exchange() {
+        let exchg = Arc::new(ExchangeSlot::new());
+        let exchg_1 = exchg.clone();
+        let exchg_2 = exchg.clone();
+        let attempt_cycles = 10000;
+        let sum_board = Arc::new(Mutex::new(BTreeSet::new()));
+        let sum_board_1 = sum_board.clone();
+        let sum_board_2 = sum_board.clone();
+        let hit_count = Arc::new(AtomicUsize::new(0));
+        let hit_count_1 = hit_count.clone();
+        let hit_count_2 = hit_count.clone();
+        assert_eq!(exchg.exchange(Some((0, ()))), Err(Some((0, ()))), "No paring exchange shall return the parameter");
+        let th1 = thread::spawn(move || {
+            for i in 0..attempt_cycles {
+                let res = exchg_2.exchange(Some((i, ())));
+                if res.is_ok() {
+                    hit_count_2.fetch_add(1, Relaxed);
+                }
+                sum_board_2.lock().unwrap().insert(res.unwrap_or_else(|err| err));
+            }
+        });
+        let th2 = thread::spawn(move || {
+            for i in attempt_cycles..attempt_cycles * 2 {
+                let res = exchg_1.exchange(Some((i, ())));
+                if res.is_ok() {
+                    hit_count_1.fetch_add(1, Relaxed);
+                }
+                sum_board_1.lock().unwrap().insert(res.unwrap_or_else(|err| err));
+            }
+        });
+        th1.join();
+        th2.join();
+        assert!(hit_count.load(Relaxed) > 0);
+        assert_eq!(sum_board.lock().unwrap().len(), attempt_cycles * 2);
+        for i in 0..attempt_cycles * 2 {
+            assert!(sum_board.lock().unwrap().contains(&Some((i, ()))));
+        }
     }
 }
