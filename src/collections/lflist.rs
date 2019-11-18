@@ -18,6 +18,7 @@ use std::hint::unreachable_unchecked;
 use rand_xoshiro::Xoroshiro64StarStar;
 use std::mem::transmute;
 use rand::prelude::*;
+use std::cmp::{min, max};
 
 const EMPTY_SLOT: usize = 0;
 const SENTINEL_SLOT: usize = 1;
@@ -60,6 +61,7 @@ pub struct List<T: Default, A: Alloc + Default = Global> {
     head: AtomicPtr<BufferMeta<T, A>>,
     count: AtomicUsize,
     buffer_cap: usize,
+    exchange: ExchangeArray<T>
 }
 
 pub struct ThreadLocalRand {
@@ -72,6 +74,7 @@ impl<T: Default, A: Alloc + Default> List<T, A> {
         Self {
             head: AtomicPtr::new(first_buffer),
             count: AtomicUsize::new(0),
+            exchange: ExchangeArray::new(),
             buffer_cap,
         }
     }
@@ -81,12 +84,11 @@ impl<T: Default, A: Alloc + Default> List<T, A> {
         self.count.fetch_add(1, Relaxed);
     }
 
-    fn do_push(&self, flag: usize, data: T) {
-        let backoff = Backoff::new();
-        let obj_size = mem::size_of::<T>();
+    fn do_push(&self, mut flag: usize, mut data: T) {
         debug_assert_ne!(flag, EMPTY_SLOT);
         debug_assert_ne!(flag, SENTINEL_SLOT);
         loop {
+            let obj_size = mem::size_of::<T>();
             let head_ptr = self.head.load(Relaxed);
             let page = BufferMeta::borrow(head_ptr);
             let slot_pos = page.head.load(Relaxed);
@@ -126,7 +128,25 @@ impl<T: Default, A: Alloc + Default> List<T, A> {
                     return;
                 }
             }
-            backoff.spin();
+            match self.exchange.exchange(Some((flag, data))) {
+                Ok(Some(tuple)) => {
+                    // exchanged a push, reset this push parameters
+                    flag = tuple.0;
+                    data = tuple.1;
+                },
+                Ok(None) => {
+                    // pushed to other popping thread
+                    return;
+                },
+                Err(Some(tuple)) => {
+                    // failed exchange, parameters have been returned
+                    flag = tuple.0;
+                    data = tuple.1;
+                }
+                Err(None) => {
+                    unreachable!();
+                }
+            }
         }
     }
 
@@ -250,7 +270,21 @@ impl<T: Default, A: Alloc + Default> List<T, A> {
             } else {
                 return res;
             }
-            backoff.spin();
+            match self.exchange.exchange(None) {
+                Ok(Some(tuple)) => {
+                    // exchanged a push, return it
+                    return Some(tuple);
+                },
+                Ok(None) => {
+                    // meet another pop
+                },
+                Err(Some(tuple)) => {
+                    unreachable!()
+                }
+                Err(None) => {
+                    // cannot find a pair to exchange
+                }
+            }
         }
     }
     pub fn drop_out_all<F>(&self, mut retain: Option<F>) where F: FnMut((usize, T)) {
@@ -623,7 +657,6 @@ impl <T: Default> ExchangeSlot<T> {
                         backoff.spin();
                     }
                 } else {
-                    debug_assert!(data_state_mut.is_empty());
                     return Err(data);
                 }
             } else if state == EXCHANGE_WAITING {
@@ -678,7 +711,7 @@ impl ThreadLocalRand {
 
 impl <T: Default> ExchangeArray <T> {
     pub fn new() -> Self {
-        Self::with_capacity(*NUM_CPU >> 2)
+        Self::with_capacity(max(*NUM_CPU >> 3, 2))
     }
 
     pub fn with_capacity(size: usize) -> Self {
@@ -835,7 +868,7 @@ mod test {
                 if res.is_ok() {
                     hit_count_2.fetch_add(1, Relaxed);
                 }
-                sum_board_2.lock().unwrap().insert(res.unwrap_or_else(|err| err));
+                assert!(sum_board_2.lock().unwrap().insert(res.unwrap_or_else(|err| err)));
             }
         });
         let th2 = thread::spawn(move || {
@@ -844,7 +877,7 @@ mod test {
                 if res.is_ok() {
                     hit_count_1.fetch_add(1, Relaxed);
                 }
-                sum_board_1.lock().unwrap().insert(res.unwrap_or_else(|err| err));
+                assert!(sum_board_1.lock().unwrap().insert(res.unwrap_or_else(|err| err)));
             }
         });
         th1.join();
@@ -852,7 +885,7 @@ mod test {
         assert!(hit_count.load(Relaxed) > 0);
         assert_eq!(sum_board.lock().unwrap().len(), attempt_cycles * 2);
         for i in 0..attempt_cycles * 2 {
-            assert!(sum_board.lock().unwrap().contains(&Some((i, ()))));
+            assert!(sum_board.lock().unwrap().contains(&Some((i, ()))), "expecting {} but not found", i);
         }
     }
 }
