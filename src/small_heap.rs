@@ -78,7 +78,7 @@ struct RemoteNodeFree {
     // sentinel_thread: thread::Thread,
 }
 
-#[derive(Clone, Default)]
+#[derive(Copy, Clone, Default)]
 struct Object {
     cpu: usize,
     tier: usize,
