@@ -613,14 +613,11 @@ impl <T: Default + Copy> ExchangeSlot<T> {
         let backoff = Backoff::new();
         let origin_data_flag = data.as_ref().map(|(f, _)| *f);
         if state == EXCHANGE_EMPTY {
-            fence(SeqCst);
             while !self.data.load().is_empty() {
                 // waiting for data to be cleared
-                fence(SeqCst);
             }
             if self.state.compare_and_swap(EXCHANGE_EMPTY, EXCHANGE_WAITING, SeqCst) == EXCHANGE_EMPTY {
                 self.data.store(ExchangeDataState::Waiting(data));
-                fence(SeqCst);
                 let mut wait_counting = 0;
                 loop {
                     // check if it can spin
@@ -635,7 +632,6 @@ impl <T: Default + Copy> ExchangeSlot<T> {
                         debug_assert!(!self.data.load().is_empty());
                         while self.data.load().is_waiting() {
                             debug_assert!(!self.data.load().is_empty());
-                            fence(SeqCst);
                         } // wait for data to be written
                         debug_assert!(self.data.load().is_busy());
                         let data_result = self.data.swap(ExchangeDataState::Empty);
@@ -664,7 +660,6 @@ impl <T: Default + Copy> ExchangeSlot<T> {
             // find a pair, get it first
             if self.state.compare_and_swap(EXCHANGE_WAITING, EXCHANGE_BUSY, Relaxed) == EXCHANGE_WAITING {
                 while !self.data.load().is_waiting() {
-                    fence(SeqCst);
                 }
                 debug_assert!(self.data.load().is_waiting());
                 let data_result = self.data.swap(ExchangeDataState::Busy(data));
