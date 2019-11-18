@@ -611,86 +611,86 @@ impl <T: Default> ExchangeSlot<T> {
         let state = self.state.load(SeqCst);
         let backoff = Backoff::new();
         let origin_data_flag = data.as_ref().map(|(f, _)| *f);
-        unsafe {
-            let data_state_ptr = self.data.get();
-            let mut data_state_mut = &mut (*data_state_ptr);
-            if state == EXCHANGE_EMPTY {
-                while !data_state_mut.is_empty() {
-                    // waiting for data to be cleared
+        let data_state_ptr = self.data.get();
+        let mut data_state_mut = unsafe { &mut (*data_state_ptr) };
+        if state == EXCHANGE_EMPTY {
+            fence(SeqCst);
+            while !data_state_mut.is_empty() {
+                // waiting for data to be cleared
+                fence(SeqCst);
+                backoff.spin();
+            }
+            if self.state.compare_and_swap(EXCHANGE_EMPTY, EXCHANGE_WAITING, SeqCst) == EXCHANGE_EMPTY {
+                *data_state_mut = ExchangeDataState::Waiting(data);
+                fence(SeqCst);
+                let mut wait_counting = 0;
+                loop {
+                    // check if it can spin
+                    if wait_counting < EXCHANGE_SPIN_CYCLES
+                        // if not, CAS to empty, can fail by other thread set BUSY
+                        || self.state.compare_and_swap(EXCHANGE_WAITING, EXCHANGE_EMPTY, SeqCst) == EXCHANGE_BUSY
+                    {
+                        wait_counting += 1;
+                        if self.state.load(SeqCst) != EXCHANGE_BUSY {
+                            continue;
+                        }
+                        debug_assert!(!data_state_mut.is_empty());
+                        while data_state_mut.is_waiting() {
+                            debug_assert!(!data_state_mut.is_empty());
+                            fence(SeqCst);
+                            backoff.spin();
+                        } // wait for data to be written
+                        debug_assert!(data_state_mut.is_busy());
+                        let mut data_result = ExchangeDataState::Empty;
+                        mem::swap(&mut data_result, data_state_mut);
+                        fence(SeqCst);
+                        self.state.store(EXCHANGE_EMPTY, SeqCst);
+                        if let ExchangeDataState::Busy(res) = data_result {
+                            return Ok(res);
+                        } else {
+                            unreachable!();
+                        }
+                    } else {
+                        // no other thead come and take over, return input
+                        assert_eq!(self.state.load(SeqCst), EXCHANGE_EMPTY, "Bad state after bail");
+                        let mut returned_data_state = ExchangeDataState::Empty;
+                        mem::swap(&mut returned_data_state, data_state_mut);
+                        fence(SeqCst);
+                        if let ExchangeDataState::Waiting(returned_data) = returned_data_state {
+                            assert_eq!(returned_data.as_ref().map(|(f, _)| *f), origin_data_flag);
+                            return Err(returned_data);
+                        } else {
+                            unreachable!()
+                        }
+                    }
+                    backoff.spin();
+                }
+            } else {
+                return Err(data);
+            }
+        } else if state == EXCHANGE_WAITING {
+            // find a pair, get it first
+            if self.state.compare_and_swap(EXCHANGE_WAITING, EXCHANGE_BUSY, Relaxed) == EXCHANGE_WAITING {
+                while !data_state_mut.is_waiting() {
                     fence(SeqCst);
                     backoff.spin();
                 }
-                if self.state.compare_and_swap(EXCHANGE_EMPTY, EXCHANGE_WAITING, SeqCst) == EXCHANGE_EMPTY {
-                    *data_state_mut = ExchangeDataState::Waiting(data);
-                    let mut wait_counting = 0;
-                    loop {
-                        // check if it can spin
-                        if wait_counting < EXCHANGE_SPIN_CYCLES
-                            // if not, CAS to empty, can fail by other thread set BUSY
-                            || self.state.compare_and_swap(EXCHANGE_WAITING, EXCHANGE_EMPTY, SeqCst) == EXCHANGE_BUSY
-                        {
-                            wait_counting += 1;
-                            if self.state.load(SeqCst) != EXCHANGE_BUSY {
-                                continue;
-                            }
-                            debug_assert!(!data_state_mut.is_empty());
-                            while data_state_mut.is_waiting() {
-                                debug_assert!(!data_state_mut.is_empty());
-                                fence(SeqCst);
-                                backoff.spin();
-                            } // wait for data to be written
-                            debug_assert!(data_state_mut.is_busy());
-                            let mut data_result = ExchangeDataState::Empty;
-                            mem::swap(&mut data_result, data_state_mut);
-                            fence(SeqCst);
-                            self.state.store(EXCHANGE_EMPTY, SeqCst);
-                            if let ExchangeDataState::Busy(res) = data_result {
-                                return Ok(res);
-                            } else {
-                                unreachable!();
-                            }
-                        } else {
-                            // no other thead come and take over, return input
-                            assert_eq!(self.state.load(SeqCst), EXCHANGE_EMPTY, "Bad state after bail");
-                            let mut returned_data_state = ExchangeDataState::Empty;
-                            mem::swap(&mut returned_data_state, data_state_mut);
-                            fence(SeqCst);
-                            if let ExchangeDataState::Waiting(returned_data) = returned_data_state {
-                                assert_eq!(returned_data.as_ref().map(|(f, _)| *f), origin_data_flag);
-                                return Err(returned_data);
-                            } else {
-                                unreachable!()
-                            }
-                        }
-                        backoff.spin();
-                    }
+                debug_assert!(data_state_mut.is_waiting());
+                let mut data_result = ExchangeDataState::Busy(data);
+                mem::swap(&mut data_result, data_state_mut);
+                fence(SeqCst);
+                if let ExchangeDataState::Waiting(res) = data_result {
+                    return Ok(res);
                 } else {
-                    return Err(data);
+                    unreachable!()
                 }
-            } else if state == EXCHANGE_WAITING {
-                // find a pair, get it first
-                if self.state.compare_and_swap(EXCHANGE_WAITING, EXCHANGE_BUSY, Relaxed) == EXCHANGE_WAITING {
-                    while !data_state_mut.is_waiting() {
-                        fence(SeqCst);
-                        backoff.spin();
-                    }
-                    debug_assert!(data_state_mut.is_waiting());
-                    let mut data_result = ExchangeDataState::Busy(data);
-                    mem::swap(&mut data_result, data_state_mut);
-                    fence(SeqCst);
-                    if let ExchangeDataState::Waiting(res) = data_result {
-                        return Ok(res);
-                    } else {
-                        unreachable!()
-                    }
-                } else {
-                    return Err(data);
-                }
-            } else if state == EXCHANGE_BUSY {
-                return Err(data);
             } else {
-                unreachable!()
+                return Err(data);
             }
+        } else if state == EXCHANGE_BUSY {
+            return Err(data);
+        } else {
+            unreachable!()
         }
     }
 }
