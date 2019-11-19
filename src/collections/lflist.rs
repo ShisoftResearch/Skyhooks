@@ -31,7 +31,7 @@ const EXCHANGE_EMPTY: usize = 0;
 const EXCHANGE_WAITING: usize = 1;
 const EXCHANGE_BUSY: usize = 2;
 const EXCHANGE_SPIN_CYCLES: usize = 200;
-const CONGESTION_REF: usize = 3;
+const CONGESTION_REF: usize = 2;
 
 type ExchangeData<T> = Option<(usize, T)>;
 
