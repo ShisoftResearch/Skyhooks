@@ -25,7 +25,6 @@ use crate::collections::fixvec::FixedVec;
 
 const EMPTY_SLOT: usize = 0;
 const SENTINEL_SLOT: usize = 1;
-const CACHE_LINE_SIZE: usize = 64;
 
 const EXCHANGE_EMPTY: usize = 0;
 const EXCHANGE_WAITING: usize = 1;

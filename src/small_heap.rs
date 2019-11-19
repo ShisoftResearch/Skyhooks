@@ -33,7 +33,15 @@ lazy_static! {
     static ref PER_NODE_META: Vec<NodeMeta> = gen_numa_node_list();
     static ref PER_CPU_META: Vec<CoreMeta> = gen_core_meta();
     static ref NODE_SHIFT_BITS: usize = node_shift_bits();
+    static ref SUPERBLOCK_SIZE: usize = *MAXIMUM_SIZE << 1;
     pub static ref MAXIMUM_SIZE: usize = maximum_size();
+}
+
+struct SuperBlock {
+    size: usize,
+    reservation: AtomicUsize,
+    used: AtomicUsize,
+    free_list: lflist::WordList<BumpAllocator>,
 }
 
 struct ThreadMeta {
