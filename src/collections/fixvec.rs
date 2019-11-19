@@ -23,7 +23,7 @@ impl<T, A: Alloc + Default> FixedVec<T, A> {
     }
 }
 
-impl<T> Index<usize> for FixedVec<T> {
+impl<T, A: Alloc + Default> Index<usize> for FixedVec<T, A> {
     type Output = T;
 
     fn index(&self, index: usize) -> &Self::Output {
@@ -32,7 +32,7 @@ impl<T> Index<usize> for FixedVec<T> {
     }
 }
 
-impl<T> IndexMut<usize> for FixedVec<T> {
+impl<T, A: Alloc + Default> IndexMut<usize> for FixedVec<T, A> {
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
         let obj_ptr = self.ptr as usize + index * mem::size_of::<T>();
         return unsafe { &mut *(obj_ptr as *mut T) };

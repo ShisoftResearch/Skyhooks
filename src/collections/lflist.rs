@@ -22,6 +22,7 @@ use std::cmp::{min, max};
 use std::marker::PhantomData;
 use crate::rand::XorRand;
 use std::os::macos::raw::stat;
+use crate::collections::fixvec::FixedVec;
 
 const EMPTY_SLOT: usize = 0;
 const SENTINEL_SLOT: usize = 1;
@@ -52,9 +53,10 @@ pub struct ExchangeSlot<T: Default + Copy> {
 }
 
 pub struct ExchangeArray<T: Default + Copy, A: Alloc + Default> {
-    slots: Vec<ExchangeSlot<T>>,
+    slots: FixedVec<ExchangeSlot<T>, A>,
     rand: XorRand,
-    shadow: PhantomData<A>
+    shadow: PhantomData<A>,
+    capacity: usize
 }
 
 pub struct List<T: Default + Copy, A: Alloc + Default = Global> {
@@ -707,15 +709,20 @@ impl <T: Default + Copy, A: Alloc + Default> ExchangeArray <T, A> {
     }
 
     pub fn with_capacity(cap: usize) -> Self {
+        let mut slots = FixedVec::new(cap);
+        for i in 0..cap {
+            slots[i] = ExchangeSlot::new()
+        }
         Self {
-            slots: (0..cap).map(|_| ExchangeSlot::new()).collect(),
+            slots,
             rand: XorRand::new(cap),
-            shadow: PhantomData
+            shadow: PhantomData,
+            capacity: cap
         }
     }
 
     pub fn exchange(&self, data: ExchangeData<T>) -> Result<ExchangeData<T>, ExchangeData<T>> {
-        let slot_num = self.rand.rand_range(0, self.slots.capacity() - 1);
+        let slot_num = self.rand.rand_range(0, self.capacity - 1);
         let slot = &self.slots[slot_num];
         slot.exchange(data)
     }
