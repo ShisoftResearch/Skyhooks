@@ -7,15 +7,33 @@ use core::{intrinsics, mem};
 use crossbeam::utils::Backoff;
 use std::alloc::Global;
 use std::intrinsics::size_of;
-use std::ops::Deref;
+use std::ops::{Deref, Add};
 use std::ptr::null_mut;
 use std::sync::atomic::Ordering::{Relaxed, SeqCst};
 use std::sync::atomic::{fence, AtomicPtr, AtomicUsize};
 use std::borrow::{Borrow, BorrowMut};
+use std::cell::{UnsafeCell, Cell};
+use crossbeam::atomic::AtomicCell;
+use std::hint::unreachable_unchecked;
+use rand_xoshiro::Xoroshiro64StarStar;
+use std::mem::transmute;
+use rand::prelude::*;
+use std::cmp::{min, max};
+use std::marker::PhantomData;
+use crate::rand::XorRand;
+use crate::collections::fixvec::FixedVec;
 
 const EMPTY_SLOT: usize = 0;
 const SENTINEL_SLOT: usize = 1;
 const CACHE_LINE_SIZE: usize = 64;
+
+const EXCHANGE_EMPTY: usize = 0;
+const EXCHANGE_WAITING: usize = 1;
+const EXCHANGE_BUSY: usize = 2;
+const EXCHANGE_SPIN_CYCLES: usize = 200;
+
+type ExchangeData<T> = Option<(usize, T)>;
+
 
 struct BufferMeta<T: Default, A: Alloc + Default> {
     head: AtomicUsize,
@@ -27,18 +45,33 @@ struct BufferMeta<T: Default, A: Alloc + Default> {
     total_size: usize
 }
 
-pub struct List<T: Default, A: Alloc + Default = Global> {
+pub struct ExchangeSlot<T: Default + Copy> {
+    state: AtomicUsize,
+    data: UnsafeCell<Option<ExchangeData<T>>>,
+    data_state: AtomicUsize
+}
+
+pub struct ExchangeArray<T: Default + Copy, A: Alloc + Default> {
+    slots: FixedVec<ExchangeSlot<T>, A>,
+    rand: XorRand,
+    shadow: PhantomData<A>,
+    capacity: usize
+}
+
+pub struct List<T: Default + Copy, A: Alloc + Default = Global> {
     head: AtomicPtr<BufferMeta<T, A>>,
     count: AtomicUsize,
     buffer_cap: usize,
+    exchange: ExchangeArray<T, A>
 }
 
-impl<T: Default, A: Alloc + Default> List<T, A> {
+impl<T: Default + Copy, A: Alloc + Default> List<T, A> {
     pub fn new(buffer_cap: usize) -> Self {
         let first_buffer = BufferMeta::new(buffer_cap);
         Self {
             head: AtomicPtr::new(first_buffer),
             count: AtomicUsize::new(0),
+            exchange: ExchangeArray::new(),
             buffer_cap,
         }
     }
@@ -48,12 +81,11 @@ impl<T: Default, A: Alloc + Default> List<T, A> {
         self.count.fetch_add(1, Relaxed);
     }
 
-    fn do_push(&self, flag: usize, data: T) {
-        let backoff = Backoff::new();
-        let obj_size = mem::size_of::<T>();
+    fn do_push(&self, mut flag: usize, mut data: T) {
         debug_assert_ne!(flag, EMPTY_SLOT);
         debug_assert_ne!(flag, SENTINEL_SLOT);
         loop {
+            let obj_size = mem::size_of::<T>();
             let head_ptr = self.head.load(Relaxed);
             let page = BufferMeta::borrow(head_ptr);
             let slot_pos = page.head.load(Relaxed);
@@ -83,15 +115,35 @@ impl<T: Default, A: Alloc + Default> List<T, A> {
                             ptr::write(obj_ptr, data);
                         }
                         fence(SeqCst);
+                        let slot_flag = intrinsics::atomic_cxchg_relaxed(slot_ptr, EMPTY_SLOT, flag).0;
                         assert_eq!(
-                            intrinsics::atomic_cxchg_relaxed(slot_ptr, EMPTY_SLOT, flag).0,
-                            EMPTY_SLOT
+                            slot_flag,
+                            EMPTY_SLOT,
+                            "Cannot swap flag for push. Flag is {} expect empty", slot_flag
                         );
                     }
                     return;
                 }
             }
-            backoff.spin();
+            match self.exchange.exchange(Some((flag, data))) {
+                Ok(Some(tuple)) => {
+                    // exchanged a push, reset this push parameters
+                    flag = tuple.0;
+                    data = tuple.1;
+                },
+                Ok(None) => {
+                    // pushed to other popping thread
+                    return;
+                },
+                Err(Some(tuple)) => {
+                    // failed exchange, parameters have been returned
+                    flag = tuple.0;
+                    data = tuple.1;
+                }
+                Err(None) => {
+                    // unreachable!();
+                }
+            }
         }
     }
 
@@ -103,21 +155,20 @@ impl<T: Default, A: Alloc + Default> List<T, A> {
             let head_ptr = self.head.load(Relaxed);
             let page = BufferMeta::borrow(head_ptr);
             let slot_pos = page.head.load(Relaxed);
-            let next_slot = slot_pos + 1;
-            if next_slot > self.buffer_cap {
+            let next_pos = slot_pos + 1;
+            if next_pos > self.buffer_cap {
                 // buffer overflow, make new and link to last buffer
                 let new_head = BufferMeta::new(self.buffer_cap);
                 unsafe {
                     (*new_head).next.store(head_ptr, Relaxed);
                 }
-                self.head.store(new_head, Relaxed);
                 if self.head.compare_and_swap(head_ptr, new_head, Relaxed) != head_ptr {
                     BufferMeta::unref(new_head);
                 }
-            // either case, retry
+                // either case, retry
             } else {
                 let slot_ptr = page.flag_ptr_of(slot_pos);
-                page.head.store(next_slot, Relaxed);
+                page.head.store(next_pos, Relaxed);
                 unsafe {
                     if obj_size != 0 {
                         let obj_ptr = page.object_ptr_of(slot_ptr);
@@ -216,7 +267,23 @@ impl<T: Default, A: Alloc + Default> List<T, A> {
             } else {
                 return res;
             }
-            backoff.spin();
+            match self.exchange.exchange(None) {
+                Ok(Some(tuple)) => {
+                    // exchanged a push, return it
+                    self.count.fetch_sub(1, Relaxed);
+                    return Some(tuple);
+                },
+                Ok(None) => {
+                    // meet another pop
+                },
+                Err(Some(tuple)) => {
+                    self.count.fetch_sub(1, Relaxed);
+                    return Some(tuple);
+                }
+                Err(None) => {
+                    // cannot find a pair to exchange
+                }
+            }
         }
     }
     pub fn drop_out_all<F>(&self, mut retain: Option<F>) where F: FnMut((usize, T)) {
@@ -285,7 +352,7 @@ impl<T: Default, A: Alloc + Default> List<T, A> {
     }
 }
 
-impl<T: Default, A: Alloc + Default> Drop for List<T, A> {
+impl<T: Default + Copy, A: Alloc + Default> Drop for List<T, A> {
     fn drop(&mut self) {
         unsafe {
             let mut node_ptr = self.head.load(Relaxed);
@@ -493,11 +560,11 @@ impl<A: Alloc + Default> WordList<A> {
     }
 }
 
-pub struct ObjectList<T: Default, A: Alloc + Default = Global> {
+pub struct ObjectList<T: Default + Copy, A: Alloc + Default = Global> {
     inner: List<T, A>,
 }
 
-impl<T: Default, A: Alloc + Default> ObjectList<T, A> {
+impl<T: Default + Copy, A: Alloc + Default> ObjectList<T, A> {
     pub fn with_capacity(cap: usize) -> Self {
         Self {
             inner: List::new(cap),
@@ -528,13 +595,151 @@ impl<T: Default, A: Alloc + Default> ObjectList<T, A> {
     }
 }
 
+impl <T: Default + Copy> ExchangeSlot<T> {
+    fn new() -> Self {
+        Self {
+            state: AtomicUsize::new(EXCHANGE_EMPTY),
+            data: UnsafeCell::new(None),
+            data_state: AtomicUsize::new(EXCHANGE_EMPTY)
+        }
+    }
+
+    fn exchange(&self, mut data: ExchangeData<T>) -> Result<ExchangeData<T>, ExchangeData<T>> {
+        // Memory ordering is somehow important here
+        // Will use SeqCst combine with fence for all operations
+        let state = self.state.load(SeqCst);
+        let backoff = Backoff::new();
+        let origin_data_flag = data.as_ref().map(|(f, _)| *f);
+        let mut data_content_mut = unsafe { &mut *self.data.get() };
+        if state == EXCHANGE_EMPTY {
+            self.wait_state_data_until(state, &backoff);
+            if self.state.compare_and_swap(EXCHANGE_EMPTY, EXCHANGE_WAITING, SeqCst) == EXCHANGE_EMPTY {
+                self.store_state_data(Some(data));
+                let mut wait_counting = 0;
+                loop {
+                    // check if it can spin
+                    if wait_counting < EXCHANGE_SPIN_CYCLES
+                        // if not, CAS to empty, can fail by other thread set BUSY
+                        || self.state.compare_and_swap(EXCHANGE_WAITING, EXCHANGE_EMPTY, SeqCst) == EXCHANGE_BUSY
+                    {
+                        wait_counting += 1;
+                        if self.state.load(SeqCst) != EXCHANGE_BUSY {
+                            continue;
+                        }
+                        self.wait_state_data_until(EXCHANGE_BUSY, &backoff);
+                        self.state.store(EXCHANGE_EMPTY, SeqCst);
+                        let mut data_result = None;
+                        self.swap_state_data(&mut data_result);
+                        if let Some(res) = data_result {
+                            return Ok(res);
+                        } else {
+                            unreachable!();
+                        }
+                    } else {
+                        // no other thead come and take over, return input
+                        assert_eq!(self.state.load(SeqCst), EXCHANGE_EMPTY, "Bad state after bail");
+                        let mut returned_data_state =  None;
+                        self.swap_state_data(&mut returned_data_state);
+                        if let Some(returned_data) = returned_data_state {
+//                            assert_eq!(
+//                                returned_data.as_ref().map(|(f, _)| *f), origin_data_flag,
+//                                "return check error. Current state: {}, in state {}",
+//                                self.state.load(Relaxed), state
+//                            );
+                            return Err(returned_data);
+                        } else {
+                            unreachable!()
+                        }
+                    }
+                }
+            } else {
+                return Err(data);
+            }
+        } else if state == EXCHANGE_WAITING {
+            // find a pair, get it first
+            if self.state.compare_and_swap(EXCHANGE_WAITING, EXCHANGE_BUSY, SeqCst) == EXCHANGE_WAITING {
+                self.wait_state_data_until(EXCHANGE_WAITING, &backoff);
+                let mut data_result = Some(data);
+                self.swap_state_data(&mut data_result);
+                if let Some(res) = data_result {
+                    return Ok(res);
+                } else {
+                    unreachable!()
+                }
+            } else {
+                return Err(data);
+            }
+        } else if state == EXCHANGE_BUSY {
+            return Err(data);
+        } else {
+            unreachable!("Got state {}, real state {}", state, self.state.load(Relaxed));
+        }
+    }
+
+    fn store_state_data(&self, data: Option<ExchangeData<T>>) {
+        let mut data_content_mut = unsafe { &mut *self.data.get() };
+        *data_content_mut = data;
+        self.data_state.store(self.state.load(Relaxed), SeqCst);
+    }
+
+    fn wait_state_data_until(&self, expecting: usize, backoff: &Backoff) {
+        while self.data_state.load(Relaxed) != expecting {
+            fence(SeqCst);
+            backoff.spin();
+        }
+    }
+
+    fn wait_state_data_sync(&self, backoff: &Backoff) {
+        self.wait_state_data_until(self.state.load(Relaxed), backoff);
+    }
+
+    fn swap_state_data(&self, data: &mut Option<ExchangeData<T>>) {
+        let mut data_content_mut = unsafe { &mut *self.data.get() };
+        mem::swap(data, data_content_mut);
+        self.data_state.store(self.state.load(Relaxed), SeqCst);
+    }
+}
+
+unsafe impl <T: Default + Copy> Sync for ExchangeSlot<T> {}
+unsafe impl <T: Default + Copy> Send for ExchangeSlot<T> {}
+
+impl <T: Default + Copy, A: Alloc + Default> ExchangeArray <T, A> {
+    pub fn new() -> Self {
+        Self::with_capacity(8)
+    }
+
+    pub fn with_capacity(cap: usize) -> Self {
+        let mut slots = FixedVec::new(cap);
+        for i in 0..cap {
+            slots[i] = ExchangeSlot::new()
+        }
+        Self {
+            slots,
+            rand: XorRand::new(cap),
+            shadow: PhantomData,
+            capacity: cap
+        }
+    }
+
+    pub fn exchange(&self, data: ExchangeData<T>) -> Result<ExchangeData<T>, ExchangeData<T>> {
+        let slot_num = self.rand.rand_range(0, self.capacity - 1);
+        let slot = &self.slots[slot_num];
+        slot.exchange(data)
+    }
+}
+
+unsafe impl <T: Default + Copy, A: Alloc + Default> Send for ExchangeArray <T, A> {}
+unsafe impl <T: Default + Copy, A: Alloc + Default> Sync for ExchangeArray <T, A> {}
+
 #[cfg(test)]
 mod test {
     use crate::collections::lflist::*;
     use crate::utils::SYS_PAGE_SIZE;
     use std::alloc::Global;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
     use std::thread;
+    use std::collections::BTreeSet;
+    use std::sync::atomic::Ordering::Relaxed;
 
     #[test]
     pub fn general() {
@@ -623,5 +828,45 @@ mod test {
         agg.sort();
         agg.dedup_by_key(|k| *k);
         assert_eq!(agg.len(), total_insertion, "unmatch after dedup");
+    }
+
+    #[test]
+    pub fn exchange() {
+        let exchg = Arc::new(ExchangeSlot::new());
+        let exchg_1 = exchg.clone();
+        let exchg_2 = exchg.clone();
+        let attempt_cycles = 10000;
+        let sum_board = Arc::new(Mutex::new(BTreeSet::new()));
+        let sum_board_1 = sum_board.clone();
+        let sum_board_2 = sum_board.clone();
+        let hit_count = Arc::new(AtomicUsize::new(0));
+        let hit_count_1 = hit_count.clone();
+        let hit_count_2 = hit_count.clone();
+        assert_eq!(exchg.exchange(Some((0, ()))), Err(Some((0, ()))), "No paring exchange shall return the parameter");
+        let th1 = thread::spawn(move || {
+            for i in 0..attempt_cycles {
+                let res = exchg_2.exchange(Some((i, ())));
+                if res.is_ok() {
+                    hit_count_2.fetch_add(1, Relaxed);
+                }
+                assert!(sum_board_2.lock().unwrap().insert(res.unwrap_or_else(|err| err)));
+            }
+        });
+        let th2 = thread::spawn(move || {
+            for i in attempt_cycles..attempt_cycles * 2 {
+                let res = exchg_1.exchange(Some((i, ())));
+                if res.is_ok() {
+                    hit_count_1.fetch_add(1, Relaxed);
+                }
+                assert!(sum_board_1.lock().unwrap().insert(res.unwrap_or_else(|err| err)));
+            }
+        });
+        th1.join();
+        th2.join();
+        assert!(hit_count.load(Relaxed) > 0);
+        assert_eq!(sum_board.lock().unwrap().len(), attempt_cycles * 2);
+        for i in 0..attempt_cycles * 2 {
+            assert!(sum_board.lock().unwrap().contains(&Some((i, ()))), "expecting {} but not found", i);
+        }
     }
 }

@@ -15,6 +15,7 @@ extern crate libc;
 extern crate test;
 extern crate crossbeam;
 
+
 pub mod api;
 mod bump_heap;
 mod generic_heap;
@@ -23,6 +24,7 @@ mod mmap;
 mod mmap_heap;
 mod small_heap;
 mod utils;
+mod rand;
 
 mod collections;
 
@@ -59,7 +61,7 @@ pub unsafe fn realloc(ptr: Ptr, size: Size) -> Ptr {
 #[global_allocator]
 #[cfg(not(feature = "bump_heap_only"))]
 static INNER_ALLOCATOR: NullocAllocator = NullocAllocator;
-
-#[global_allocator]
-#[cfg(feature = "bump_heap_only")]
-static INNER_ALLOCATOR: BumpAllocator = BumpAllocator;
+//
+//#[global_allocator]
+//#[cfg(feature = "bump_heap_only")]
+//static INNER_ALLOCATOR: BumpAllocator = BumpAllocator;

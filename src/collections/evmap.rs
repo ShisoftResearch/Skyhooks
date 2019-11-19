@@ -12,17 +12,17 @@ use std::sync::Arc;
 type EvBins<V> = Arc<Vec<lflist::ObjectList<(usize, V)>>>;
 
 #[derive(Clone)]
-pub struct Producer<V: Default> {
+pub struct Producer<V: Default + Copy> {
     cache: EvBins<V>,
     shadow: PhantomData<V>,
 }
 
-pub struct EvMap<V: Clone + Default> {
+pub struct EvMap<V: Clone + Default + Copy> {
     map: lfmap::ObjectMap<V>,
     source: EvBins<V>,
 }
 
-impl<V: Clone + Default> EvMap<V> {
+impl<V: Clone + Default + Copy> EvMap<V> {
     pub fn new() -> Self {
         let mut source = Vec::with_capacity(*NUM_CPU);
         for _ in 0..*NUM_CPU {
@@ -71,7 +71,7 @@ impl<V: Clone + Default> EvMap<V> {
     }
 }
 
-impl<V: Default> Producer<V> {
+impl<V: Default + Copy> Producer<V> {
     #[inline]
     pub fn insert(&self, key: usize, value: V) {
         // current_cpu is cheap in Linux: 16 ns/iter (+/- 1)
