@@ -611,28 +611,27 @@ impl <T: Default + Copy> ExchangeSlot<T> {
 
     fn exchange(&self, mut data: ExchangeData<T>) -> Result<ExchangeData<T>, ExchangeData<T>> {
         // Memory ordering is somehow important here
-        // Will use SeqCst combine with fence for all operations
-        let state = self.state.load(SeqCst);
+        let state = self.state.load(Relaxed);
         let backoff = Backoff::new();
         let origin_data_flag = data.as_ref().map(|(f, _)| *f);
         let mut data_content_mut = unsafe { &mut *self.data.get() };
         if state == EXCHANGE_EMPTY {
             self.wait_state_data_until(state, &backoff);
-            if self.state.compare_and_swap(EXCHANGE_EMPTY, EXCHANGE_WAITING, SeqCst) == EXCHANGE_EMPTY {
+            if self.state.compare_and_swap(EXCHANGE_EMPTY, EXCHANGE_WAITING, Relaxed) == EXCHANGE_EMPTY {
                 self.store_state_data(Some(data));
                 let mut wait_counting = 0;
                 loop {
                     // check if it can spin
                     if wait_counting < EXCHANGE_SPIN_CYCLES
                         // if not, CAS to empty, can fail by other thread set BUSY
-                        || self.state.compare_and_swap(EXCHANGE_WAITING, EXCHANGE_EMPTY, SeqCst) == EXCHANGE_BUSY
+                        || self.state.compare_and_swap(EXCHANGE_WAITING, EXCHANGE_EMPTY, Relaxed) == EXCHANGE_BUSY
                     {
                         wait_counting += 1;
-                        if self.state.load(SeqCst) != EXCHANGE_BUSY {
+                        if self.state.load(Relaxed) != EXCHANGE_BUSY {
                             continue;
                         }
                         self.wait_state_data_until(EXCHANGE_BUSY, &backoff);
-                        self.state.store(EXCHANGE_EMPTY, SeqCst);
+                        self.state.store(EXCHANGE_EMPTY, Relaxed);
                         let mut data_result = None;
                         self.swap_state_data(&mut data_result);
                         if let Some(res) = data_result {
@@ -642,7 +641,7 @@ impl <T: Default + Copy> ExchangeSlot<T> {
                         }
                     } else {
                         // no other thead come and take over, return input
-                        assert_eq!(self.state.load(SeqCst), EXCHANGE_EMPTY, "Bad state after bail");
+                        assert_eq!(self.state.load(Relaxed), EXCHANGE_EMPTY, "Bad state after bail");
                         let mut returned_data_state =  None;
                         self.swap_state_data(&mut returned_data_state);
                         if let Some(returned_data) = returned_data_state {
@@ -662,7 +661,7 @@ impl <T: Default + Copy> ExchangeSlot<T> {
             }
         } else if state == EXCHANGE_WAITING {
             // find a pair, get it first
-            if self.state.compare_and_swap(EXCHANGE_WAITING, EXCHANGE_BUSY, SeqCst) == EXCHANGE_WAITING {
+            if self.state.compare_and_swap(EXCHANGE_WAITING, EXCHANGE_BUSY, Relaxed) == EXCHANGE_WAITING {
                 self.wait_state_data_until(EXCHANGE_WAITING, &backoff);
                 let mut data_result = Some(data);
                 self.swap_state_data(&mut data_result);
