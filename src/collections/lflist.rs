@@ -52,9 +52,7 @@ pub struct ExchangeSlot<T: Default + Copy> {
 }
 
 pub struct ExchangeArray<T: Default + Copy, A: Alloc + Default> {
-    slots: *mut ExchangeSlot<T>,
-    slot_size: usize,
-    capacity: usize,
+    slots: Vec<ExchangeSlot<T>>,
     rand: XorRand,
     shadow: PhantomData<A>
 }
@@ -705,36 +703,17 @@ impl <T: Default + Copy, A: Alloc + Default> ExchangeArray <T, A> {
     }
 
     pub fn with_capacity(cap: usize) -> Self {
-        let slot_size = mem::size_of::<ExchangeSlot<T>>();
-        let slot_total_size = slot_size + align_padding(slot_size, 8);
-        let slots_size = slot_total_size * cap;
-        let slots_addr = alloc_mem::<usize, A>(slots_size) as *mut ExchangeSlot<T>;
-        let mut slot_pos = slots_addr as usize;
-        for i in 0..cap {
-            let mut slot = unsafe { &mut*(slot_pos as *mut ExchangeSlot<T>) };
-            *slot = ExchangeSlot::new();
-            slot_pos += slot_total_size;
-        }
         Self {
-            slots: slots_addr,
-            slot_size: slot_total_size,
-            capacity: cap,
+            slots: (0..cap).map(|_| ExchangeSlot::new()).collect(),
             rand: XorRand::new(cap),
             shadow: PhantomData
         }
     }
 
     pub fn exchange(&self, data: ExchangeData<T>) -> Result<ExchangeData<T>, ExchangeData<T>> {
-        let slot_num = self.rand.rand_range(0, self.capacity);
-        let base_addr = self.slots as usize;
-        let slot = unsafe { &*((base_addr + slot_num * self.slot_size) as *const ExchangeSlot<T>) };
+        let slot_num = self.rand.rand_range(0, self.slots.capacity() - 1);
+        let slot = &self.slots[slot_num];
         slot.exchange(data)
-    }
-}
-
-impl <T: Default + Copy, A: Alloc + Default> Drop for ExchangeArray<T, A> {
-    fn drop(&mut self) {
-        dealloc_mem::<usize, A>(self.slots as usize, self.slot_size * self.capacity);
     }
 }
 
