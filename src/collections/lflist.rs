@@ -116,7 +116,6 @@ impl<T: Default + Copy, A: Alloc + Default> List<T, A> {
                             let obj_ptr = page.object_ptr_of(slot_ptr);
                             ptr::write(obj_ptr, data);
                         }
-                        fence(SeqCst);
                         let slot_flag = intrinsics::atomic_cxchg_relaxed(slot_ptr, EMPTY_SLOT, flag).0;
                         assert_eq!(
                             slot_flag,
@@ -247,7 +246,6 @@ impl<T: Default + Copy, A: Alloc + Default> List<T, A> {
                                     *obj =  ptr::read(obj_ptr as *mut T)
                                 });
                         }
-                        fence(SeqCst);
                         let swapped = page.head.compare_and_swap(slot, new_slot, Relaxed);
                         debug_assert!(
                             swapped >= slot,
