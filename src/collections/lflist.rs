@@ -19,6 +19,8 @@ use rand_xoshiro::Xoroshiro64StarStar;
 use std::mem::transmute;
 use rand::prelude::*;
 use std::cmp::{min, max};
+use std::marker::PhantomData;
+use crate::rand::XorRand;
 
 const EMPTY_SLOT: usize = 0;
 const SENTINEL_SLOT: usize = 1;
@@ -27,7 +29,7 @@ const CACHE_LINE_SIZE: usize = 64;
 const EXCHANGE_EMPTY: usize = 0;
 const EXCHANGE_WAITING: usize = 1;
 const EXCHANGE_BUSY: usize = 2;
-const EXCHANGE_SPIN_CYCLES: usize = 1000;
+const EXCHANGE_SPIN_CYCLES: usize = 100;
 
 type ExchangeData<T> = Option<(usize, T)>;
 
@@ -54,19 +56,19 @@ pub struct ExchangeSlot<T: Default + Copy> {
     data: AtomicCell<ExchangeDataState<T>>
 }
 
-pub struct ExchangeArray<T: Default + Copy> {
-    slots: Vec<ExchangeSlot<T>>
+pub struct ExchangeArray<T: Default + Copy, A: Alloc + Default> {
+    slots: *mut ExchangeSlot<T>,
+    slot_size: usize,
+    capacity: usize,
+    rand: XorRand,
+    shadow: PhantomData<A>
 }
 
 pub struct List<T: Default + Copy, A: Alloc + Default = Global> {
     head: AtomicPtr<BufferMeta<T, A>>,
     count: AtomicUsize,
     buffer_cap: usize,
-    exchange: ExchangeArray<T>
-}
-
-pub struct ThreadLocalRand {
-    num: Cell<usize>
+    exchange: ExchangeArray<T, A>
 }
 
 impl<T: Default + Copy, A: Alloc + Default> List<T, A> {
@@ -682,44 +684,47 @@ impl <T: Default + Copy> ExchangeSlot<T> {
 unsafe impl <T: Default + Copy> Sync for ExchangeSlot<T> {}
 unsafe impl <T: Default + Copy> Send for ExchangeSlot<T> {}
 
-thread_local! {
-    static RND: ThreadLocalRand = ThreadLocalRand::new();
-}
-
-impl ThreadLocalRand {
+impl <T: Default + Copy, A: Alloc + Default> ExchangeArray <T, A> {
     pub fn new() -> Self {
-        let mut thread_rng = thread_rng();
-        let num = Cell::new(thread_rng.gen());
-        Self { num }
+        Self::with_capacity(4)
     }
 
-    pub fn rand(&self, start: usize, end: usize) -> usize {
-        let seed_num = self.num.get();
-        let seed = unsafe { transmute(seed_num) };
-        self.num.set(seed_num.wrapping_add(1));
-        let mut rng = Xoroshiro64StarStar::from_seed(seed);
-        rng.gen_range(start, end)
-    }
-}
-
-impl <T: Default + Copy> ExchangeArray <T> {
-    pub fn new() -> Self {
-        Self::with_capacity(max(*NUM_CPU >> 4, 2))
-    }
-
-    pub fn with_capacity(size: usize) -> Self {
+    pub fn with_capacity(cap: usize) -> Self {
+        let slot_size = mem::size_of::<ExchangeSlot<T>>();
+        let slot_total_size = slot_size + align_padding(slot_size, 8);
+        let slots_size = slot_total_size * cap;
+        let slots_addr = alloc_mem::<usize, A>(slots_size) as *mut ExchangeSlot<T>;
+        let mut slot_pos = slots_addr as usize;
+        for i in 0..cap {
+            let mut slot = unsafe { &mut*(slot_pos as *mut ExchangeSlot<T>) };
+            *slot = ExchangeSlot::new();
+            slot_pos += slot_total_size;
+        }
         Self {
-            slots: (0..size).map(|_| {
-                ExchangeSlot::new()
-            }).collect()
+            slots: slots_addr,
+            slot_size: slot_total_size,
+            capacity: cap,
+            rand: XorRand::new(cap),
+            shadow: PhantomData
         }
     }
 
     pub fn exchange(&self, data: ExchangeData<T>) -> Result<ExchangeData<T>, ExchangeData<T>> {
-        let slot_num = RND.with(|r| r.rand(0, self.slots.len()));
-        self.slots[slot_num].exchange(data)
+        let slot_num = self.rand.rand_range(0, self.capacity);
+        let base_addr = self.slots as usize;
+        let slot = unsafe { &*((base_addr + slot_num * self.slot_size) as *const ExchangeSlot<T>) };
+        slot.exchange(data)
     }
 }
+
+impl <T: Default + Copy, A: Alloc + Default> Drop for ExchangeArray<T, A> {
+    fn drop(&mut self) {
+        dealloc_mem::<usize, A>(self.slots as usize, self.slot_size * self.capacity);
+    }
+}
+
+unsafe impl <T: Default + Copy, A: Alloc + Default> Send for ExchangeArray <T, A> {}
+unsafe impl <T: Default + Copy, A: Alloc + Default> Sync for ExchangeArray <T, A> {}
 
 impl <T>ExchangeDataState<T> {
     fn is_empty(&self) -> bool {

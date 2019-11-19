@@ -24,6 +24,7 @@ mod mmap;
 mod mmap_heap;
 mod small_heap;
 mod utils;
+mod rand;
 
 mod collections;
 
@@ -37,29 +38,29 @@ use crate::api::NullocAllocator;
 use crate::bump_heap::BumpAllocator;
 use core::ffi::c_void;
 
-//#[no_mangle]
-//pub unsafe fn malloc(size: Size) -> Ptr {
-//    api::nu_malloc(size)
-//}
-//
-//#[no_mangle]
-//pub unsafe fn free(ptr: Ptr) {
-//    api::nu_free(ptr)
-//}
-//
-//#[no_mangle]
-//pub unsafe fn calloc(nmemb: Size, size: Size) -> Ptr {
-//    api::nu_calloc(nmemb, size)
-//}
-//
-//#[no_mangle]
-//pub unsafe fn realloc(ptr: Ptr, size: Size) -> Ptr {
-//    api::nu_realloc(ptr, size)
-//}
-//
-//#[global_allocator]
-//#[cfg(not(feature = "bump_heap_only"))]
-//static INNER_ALLOCATOR: NullocAllocator = NullocAllocator;
+#[no_mangle]
+pub unsafe fn malloc(size: Size) -> Ptr {
+    api::nu_malloc(size)
+}
+
+#[no_mangle]
+pub unsafe fn free(ptr: Ptr) {
+    api::nu_free(ptr)
+}
+
+#[no_mangle]
+pub unsafe fn calloc(nmemb: Size, size: Size) -> Ptr {
+    api::nu_calloc(nmemb, size)
+}
+
+#[no_mangle]
+pub unsafe fn realloc(ptr: Ptr, size: Size) -> Ptr {
+    api::nu_realloc(ptr, size)
+}
+
+#[global_allocator]
+#[cfg(not(feature = "bump_heap_only"))]
+static INNER_ALLOCATOR: NullocAllocator = NullocAllocator;
 //
 //#[global_allocator]
 //#[cfg(feature = "bump_heap_only")]
