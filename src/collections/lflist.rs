@@ -21,7 +21,6 @@ use rand::prelude::*;
 use std::cmp::{min, max};
 use std::marker::PhantomData;
 use crate::rand::XorRand;
-use std::os::macos::raw::stat;
 use crate::collections::fixvec::FixedVec;
 
 const EMPTY_SLOT: usize = 0;
