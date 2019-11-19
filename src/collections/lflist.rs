@@ -21,6 +21,7 @@ use rand::prelude::*;
 use std::cmp::{min, max};
 use std::marker::PhantomData;
 use crate::rand::XorRand;
+use std::os::macos::raw::stat;
 
 const EMPTY_SLOT: usize = 0;
 const SENTINEL_SLOT: usize = 1;
@@ -29,7 +30,7 @@ const CACHE_LINE_SIZE: usize = 64;
 const EXCHANGE_EMPTY: usize = 0;
 const EXCHANGE_WAITING: usize = 1;
 const EXCHANGE_BUSY: usize = 2;
-const EXCHANGE_SPIN_CYCLES: usize = 100;
+const EXCHANGE_SPIN_CYCLES: usize = 1000;
 
 type ExchangeData<T> = Option<(usize, T)>;
 
@@ -44,16 +45,10 @@ struct BufferMeta<T: Default, A: Alloc + Default> {
     total_size: usize
 }
 
-#[derive(Copy, Clone)]
-enum ExchangeDataState<T> {
-    Empty,
-    Waiting(ExchangeData<T>),
-    Busy(ExchangeData<T>)
-}
-
 pub struct ExchangeSlot<T: Default + Copy> {
     state: AtomicUsize,
-    data: AtomicCell<ExchangeDataState<T>>
+    data: UnsafeCell<Option<ExchangeData<T>>>,
+    data_state: AtomicUsize
 }
 
 pub struct ExchangeArray<T: Default + Copy, A: Alloc + Default> {
@@ -604,7 +599,8 @@ impl <T: Default + Copy> ExchangeSlot<T> {
     fn new() -> Self {
         Self {
             state: AtomicUsize::new(EXCHANGE_EMPTY),
-            data: AtomicCell::new(ExchangeDataState::Empty)
+            data: UnsafeCell::new(None),
+            data_state: AtomicUsize::new(EXCHANGE_EMPTY)
         }
     }
 
@@ -614,12 +610,11 @@ impl <T: Default + Copy> ExchangeSlot<T> {
         let state = self.state.load(Relaxed);
         let backoff = Backoff::new();
         let origin_data_flag = data.as_ref().map(|(f, _)| *f);
+        let mut data_content_mut = unsafe { &mut *self.data.get() };
         if state == EXCHANGE_EMPTY {
-            while !self.data.load().is_empty() {
-                // waiting for data to be cleared
-            }
+            self.wait_state_data_until(state, &backoff);
             if self.state.compare_and_swap(EXCHANGE_EMPTY, EXCHANGE_WAITING, Relaxed) == EXCHANGE_EMPTY {
-                self.data.store(ExchangeDataState::Waiting(data));
+                self.store_state_data(Some(data));
                 let mut wait_counting = 0;
                 loop {
                     // check if it can spin
@@ -631,14 +626,11 @@ impl <T: Default + Copy> ExchangeSlot<T> {
                         if self.state.load(Relaxed) != EXCHANGE_BUSY {
                             continue;
                         }
-                        debug_assert!(!self.data.load().is_empty());
-                        while self.data.load().is_waiting() {
-                            debug_assert!(!self.data.load().is_empty());
-                        } // wait for data to be written
-                        debug_assert!(self.data.load().is_busy());
-                        let data_result = self.data.swap(ExchangeDataState::Empty);
+                        self.wait_state_data_until(EXCHANGE_BUSY, &backoff);
                         self.state.store(EXCHANGE_EMPTY, Relaxed);
-                        if let ExchangeDataState::Busy(res) = data_result {
+                        let mut data_result = None;
+                        self.swap_state_data(&mut data_result);
+                        if let Some(res) = data_result {
                             return Ok(res);
                         } else {
                             unreachable!();
@@ -646,8 +638,9 @@ impl <T: Default + Copy> ExchangeSlot<T> {
                     } else {
                         // no other thead come and take over, return input
                         assert_eq!(self.state.load(Relaxed), EXCHANGE_EMPTY, "Bad state after bail");
-                        let returned_data_state =  self.data.swap(ExchangeDataState::Empty);
-                        if let ExchangeDataState::Waiting(returned_data) = returned_data_state {
+                        let mut returned_data_state =  None;
+                        self.swap_state_data(&mut returned_data_state);
+                        if let Some(returned_data) = returned_data_state {
                             assert_eq!(returned_data.as_ref().map(|(f, _)| *f), origin_data_flag);
                             return Err(returned_data);
                         } else {
@@ -661,11 +654,10 @@ impl <T: Default + Copy> ExchangeSlot<T> {
         } else if state == EXCHANGE_WAITING {
             // find a pair, get it first
             if self.state.compare_and_swap(EXCHANGE_WAITING, EXCHANGE_BUSY, Relaxed) == EXCHANGE_WAITING {
-                while !self.data.load().is_waiting() {
-                }
-                debug_assert!(self.data.load().is_waiting());
-                let data_result = self.data.swap(ExchangeDataState::Busy(data));
-                if let ExchangeDataState::Waiting(res) = data_result {
+                self.wait_state_data_until(EXCHANGE_WAITING, &backoff);
+                let mut data_result = Some(data);
+                self.swap_state_data(&mut data_result);
+                if let Some(res) = data_result {
                     return Ok(res);
                 } else {
                     unreachable!()
@@ -676,8 +668,31 @@ impl <T: Default + Copy> ExchangeSlot<T> {
         } else if state == EXCHANGE_BUSY {
             return Err(data);
         } else {
-            unreachable!()
+            unreachable!("Got state {}, real state {}", state, self.state.load(Relaxed));
         }
+    }
+
+    fn store_state_data(&self, data: Option<ExchangeData<T>>) {
+        let mut data_content_mut = unsafe { &mut *self.data.get() };
+        *data_content_mut = data;
+        self.data_state.store(self.state.load(Relaxed), SeqCst);
+    }
+
+    fn wait_state_data_until(&self, expecting: usize, backoff: &Backoff) {
+        while self.data_state.load(Relaxed) != expecting {
+            fence(SeqCst);
+            backoff.spin();
+        }
+    }
+
+    fn wait_state_data_sync(&self, backoff: &Backoff) {
+        self.wait_state_data_until(self.state.load(Relaxed), backoff);
+    }
+
+    fn swap_state_data(&self, data: &mut Option<ExchangeData<T>>) {
+        let mut data_content_mut = unsafe { &mut *self.data.get() };
+        mem::swap(data, data_content_mut);
+        self.data_state.store(self.state.load(Relaxed), SeqCst);
     }
 }
 
@@ -725,28 +740,6 @@ impl <T: Default + Copy, A: Alloc + Default> Drop for ExchangeArray<T, A> {
 
 unsafe impl <T: Default + Copy, A: Alloc + Default> Send for ExchangeArray <T, A> {}
 unsafe impl <T: Default + Copy, A: Alloc + Default> Sync for ExchangeArray <T, A> {}
-
-impl <T>ExchangeDataState<T> {
-    fn is_empty(&self) -> bool {
-        match self {
-            ExchangeDataState::Empty => true,
-            _ => false
-        }
-    }
-
-    fn is_waiting(&self) -> bool {
-        match self {
-            ExchangeDataState::Waiting(_) => true,
-            _ => false
-        }
-    }
-    fn is_busy(&self) -> bool {
-        match self {
-            ExchangeDataState::Busy(_) => true,
-            _ => false
-        }
-    }
-}
 
 #[cfg(test)]
 mod test {
