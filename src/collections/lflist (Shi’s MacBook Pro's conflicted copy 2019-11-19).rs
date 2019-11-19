@@ -21,6 +21,7 @@ use rand::prelude::*;
 use std::cmp::{min, max};
 use std::marker::PhantomData;
 use crate::rand::XorRand;
+use std::os::macos::raw::stat;
 use crate::collections::fixvec::FixedVec;
 
 const EMPTY_SLOT: usize = 0;
@@ -30,7 +31,7 @@ const CACHE_LINE_SIZE: usize = 64;
 const EXCHANGE_EMPTY: usize = 0;
 const EXCHANGE_WAITING: usize = 1;
 const EXCHANGE_BUSY: usize = 2;
-const EXCHANGE_SPIN_CYCLES: usize = 200;
+const EXCHANGE_SPIN_CYCLES: usize = 1000;
 
 type ExchangeData<T> = Option<(usize, T)>;
 
@@ -141,7 +142,7 @@ impl<T: Default + Copy, A: Alloc + Default> List<T, A> {
                     data = tuple.1;
                 }
                 Err(None) => {
-                    // unreachable!();
+                    unreachable!();
                 }
             }
         }
@@ -277,8 +278,7 @@ impl<T: Default + Copy, A: Alloc + Default> List<T, A> {
                     // meet another pop
                 },
                 Err(Some(tuple)) => {
-                    self.count.fetch_sub(1, Relaxed);
-                    return Some(tuple);
+                    unreachable!()
                 }
                 Err(None) => {
                     // cannot find a pair to exchange
@@ -705,7 +705,7 @@ unsafe impl <T: Default + Copy> Send for ExchangeSlot<T> {}
 
 impl <T: Default + Copy, A: Alloc + Default> ExchangeArray <T, A> {
     pub fn new() -> Self {
-        Self::with_capacity(8)
+        Self::with_capacity(4)
     }
 
     pub fn with_capacity(cap: usize) -> Self {
