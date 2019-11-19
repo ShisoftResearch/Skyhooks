@@ -31,6 +31,7 @@ const EXCHANGE_EMPTY: usize = 0;
 const EXCHANGE_WAITING: usize = 1;
 const EXCHANGE_BUSY: usize = 2;
 const EXCHANGE_SPIN_CYCLES: usize = 200;
+const CONGESTION_REF: usize = 3;
 
 type ExchangeData<T> = Option<(usize, T)>;
 
@@ -90,6 +91,7 @@ impl<T: Default + Copy, A: Alloc + Default> List<T, A> {
             let page = BufferMeta::borrow(head_ptr);
             let slot_pos = page.head.load(Relaxed);
             let next_pos = slot_pos + 1;
+            let reference = page.refs.load(Relaxed);
             if next_pos > self.buffer_cap {
                 // buffer overflow, make new and link to last buffer
                 let new_head = BufferMeta::new(self.buffer_cap);
@@ -125,23 +127,25 @@ impl<T: Default + Copy, A: Alloc + Default> List<T, A> {
                     return;
                 }
             }
-            match self.exchange.exchange(Some((flag, data))) {
-                Ok(Some(tuple)) => {
-                    // exchanged a push, reset this push parameters
-                    flag = tuple.0;
-                    data = tuple.1;
-                },
-                Ok(None) => {
-                    // pushed to other popping thread
-                    return;
-                },
-                Err(Some(tuple)) => {
-                    // failed exchange, parameters have been returned
-                    flag = tuple.0;
-                    data = tuple.1;
-                }
-                Err(None) => {
-                    // unreachable!();
+            if reference > CONGESTION_REF {
+                match self.exchange.exchange(Some((flag, data))) {
+                    Ok(Some(tuple)) => {
+                        // exchanged a push, reset this push parameters
+                        flag = tuple.0;
+                        data = tuple.1;
+                    },
+                    Ok(None) => {
+                        // pushed to other popping thread
+                        return;
+                    },
+                    Err(Some(tuple)) => {
+                        // failed exchange, parameters have been returned
+                        flag = tuple.0;
+                        data = tuple.1;
+                    }
+                    Err(None) => {
+                        // unreachable!();
+                    }
                 }
             }
         }
@@ -195,6 +199,7 @@ impl<T: Default + Copy, A: Alloc + Default> List<T, A> {
             let slot = page.head.load(Relaxed);
             let obj_size = mem::size_of::<T>();
             let next_buffer_ptr = page.next.load(Relaxed);
+            let reference = page.refs.load(Relaxed);
             if slot == 0 && next_buffer_ptr == null_mut() {
                 // empty buffer chain
                 return None;
@@ -267,21 +272,23 @@ impl<T: Default + Copy, A: Alloc + Default> List<T, A> {
             } else {
                 return res;
             }
-            match self.exchange.exchange(None) {
-                Ok(Some(tuple)) => {
-                    // exchanged a push, return it
-                    self.count.fetch_sub(1, Relaxed);
-                    return Some(tuple);
-                },
-                Ok(None) => {
-                    // meet another pop
-                },
-                Err(Some(tuple)) => {
-                    self.count.fetch_sub(1, Relaxed);
-                    return Some(tuple);
-                }
-                Err(None) => {
-                    // cannot find a pair to exchange
+            if reference > CONGESTION_REF {
+                match self.exchange.exchange(None) {
+                    Ok(Some(tuple)) => {
+                        // exchanged a push, return it
+                        self.count.fetch_sub(1, Relaxed);
+                        return Some(tuple);
+                    },
+                    Ok(None) => {
+                        // meet another pop
+                    },
+                    Err(Some(tuple)) => {
+                        self.count.fetch_sub(1, Relaxed);
+                        return Some(tuple);
+                    }
+                    Err(None) => {
+                        // cannot find a pair to exchange
+                    }
                 }
             }
         }
