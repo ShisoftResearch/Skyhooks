@@ -227,7 +227,7 @@ pub fn size_of(ptr: Ptr) -> Option<usize> {
 
 #[inline]
 fn maximum_free_list_covered_size() -> usize {
-    size_classes()[BUMP_SIZE_CLASS - 1].size
+    2 << (BUMP_SIZE_CLASS - 1)
 }
 
 #[inline]
