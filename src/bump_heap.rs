@@ -267,7 +267,6 @@ mod test {
     use std::alloc::{GlobalAlloc, Layout};
 
     #[test]
-    #[ignore]
     pub fn generic() {
         unsafe {
             let a = BumpAllocator;
