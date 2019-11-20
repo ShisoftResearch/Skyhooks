@@ -80,6 +80,10 @@ pub fn allocate(size: usize) -> Ptr {
         let (addr, block) = superblock.allocate();
         debug_assert_eq!(superblock.numa, meta.numa);
         debug_assert_eq!(unsafe { &*(block as *const SuperBlock) }.numa, meta.numa);
+        if cfg!(debug_assertions) && size >= CACHE_LINE_SIZE {
+            // ensure all address are cache aligned
+            debug_assert_eq!(align_padding(addr, CACHE_LINE_SIZE), 0);
+        }
         return addr as Ptr;
     })
 }
