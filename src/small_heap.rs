@@ -37,7 +37,6 @@ lazy_static! {
 }
 
 struct SuperBlock {
-    tier: usize,
     cpu:  usize,
     size: usize,
     data_base: usize,
@@ -114,11 +113,6 @@ pub fn free(ptr: Ptr) -> bool {
     if let Some(superblock_addr) = object_list.get(addr) {
         let superblock_ref = unsafe { & *(superblock_addr as *const SuperBlock) };
         debug_assert_eq!(addr_numa_id(addr), superblock_ref.numa);
-        debug_assert_eq!(
-            superblock_ref.tier, size_class_index_from_size(superblock_ref.size),
-            "Block tier {}, size: {}, index: {}", superblock_ref.tier,
-            superblock_ref.size, size_class_index_from_size(superblock_ref.size)
-        );
         if superblock_ref.numa == current_numa {
             superblock_ref.dealloc(addr);
         } else {
@@ -227,7 +221,6 @@ impl SuperBlock {
             debug_assert_eq!(addr_numa_id(boundary - 1), numa_id);
             unsafe {
                 *(node_base as *mut Self) = Self {
-                    tier,
                     numa: numa_id,
                     cpu,
                     size,
