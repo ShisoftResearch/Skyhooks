@@ -28,11 +28,8 @@ thread_local! {
 lazy_static! {
     static ref PER_NODE_META: Vec<NodeMeta> = gen_numa_node_list();
     static ref PER_CPU_META: Vec<CoreMeta> = gen_core_meta();
-    static ref NODES_BITS: usize = node_bits();
     static ref SUPERBLOCK_SIZE: usize = *MAXIMUM_SIZE << 2;
-    static ref NODE_SHIFT_BITS: usize = node_shift_bits();
-    static ref ADDRESSIBLE_CHUNK_SIZE: usize = addressable_chunk_size();
-    static ref ADDRESSIBLE_CHUNK_BITS: usize = chunk_offset_bits();
+    static ref OBJECT_MAP: evmap::EvMap = evmap::EvMap::new();
     pub static ref MAXIMUM_SIZE: usize = maximum_size();
 }
 
@@ -56,7 +53,6 @@ struct ThreadMeta {
 struct NodeMeta {
     size_class_list: TSizeClasses,
     pending_free: lflist::WordList<BumpAllocator>,
-    objects: evmap::EvMap,
 }
 
 struct SizeClass {
@@ -83,37 +79,30 @@ pub fn allocate(size: usize) -> Ptr {
         let superblock = &cpu_meta.size_class_list[size_class_index];
         let (addr, block) = superblock.allocate();
         debug_assert_eq!(superblock.numa, meta.numa);
-        debug_assert_eq!(addr_numa_id(addr), meta.numa);
         return addr as Ptr;
     })
 }
 
 pub fn contains(ptr: Ptr) -> bool {
     let addr = ptr as usize;
-    let numa_id = addr_numa_id(addr);
-    let object_list = &PER_NODE_META[numa_id].objects;
-    object_list.refresh();
-    object_list.contains(addr)
+    OBJECT_MAP.refresh();
+    OBJECT_MAP.contains(addr)
 }
 
 pub fn free(ptr: Ptr) -> bool {
     let current_numa = THREAD_META.with(|meta| { meta.numa });
     PER_NODE_META[current_numa].pending_free.drop_out_all(Some(|(addr, _)| {
-        debug_assert_eq!(addr_numa_id(addr), current_numa);
         free(addr as Ptr);
     }));
 
     let addr = ptr as usize;
-    let obj_numa_id = addr_numa_id(addr);
-    let object_list = &PER_NODE_META[obj_numa_id].objects;
-    object_list.refresh();
-    if let Some(superblock_addr) = object_list.get(addr) {
+    OBJECT_MAP.refresh();
+    if let Some(superblock_addr) = OBJECT_MAP.get(addr) {
         let superblock_ref = unsafe { & *(superblock_addr as *const SuperBlock) };
-        debug_assert_eq!(addr_numa_id(addr), superblock_ref.numa);
         if superblock_ref.numa == current_numa {
             superblock_ref.dealloc(addr);
         } else {
-            PER_NODE_META[obj_numa_id].pending_free.push(addr);
+            PER_NODE_META[superblock_ref.numa].pending_free.push(addr);
         }
         return true;
     } else {
@@ -122,10 +111,8 @@ pub fn free(ptr: Ptr) -> bool {
 }
 pub fn size_of(ptr: Ptr) -> Option<usize> {
     let addr = ptr as usize;
-    let numa_id = addr_numa_id(addr);
-    let object_list = &PER_NODE_META[numa_id].objects;
-    object_list.refresh();
-    object_list.get(ptr as usize).map(|superblock_addr| {
+    OBJECT_MAP.refresh();
+    OBJECT_MAP.get(ptr as usize).map(|superblock_addr| {
         let superblock_ref = unsafe { & *(superblock_addr as *const SuperBlock) };
         superblock_ref.size
     })
@@ -163,7 +150,6 @@ impl SizeClass {
                 let superblock = unsafe { &*(block_addr as *mut SuperBlock) };
                 debug_assert_eq!(superblock.numa, self.numa);
                 if let Some(addr) = superblock.allocate() {
-                    debug_assert_eq!(addr_numa_id(addr), self.numa);
                     return (addr, block_addr);
                 }
             }
@@ -198,58 +184,41 @@ impl SuperBlock {
         let padding = align_padding(self_size, CACHE_LINE_SIZE);
         // Cache align on data
         let self_size_with_padding = self_size + padding;
-        let chunk_size = *ADDRESSIBLE_CHUNK_SIZE;
+        let chunk_size = self_size_with_padding + *SUPERBLOCK_SIZE;
         let addr = mmap_without_fd(chunk_size) as usize;
-        let node_shift_bits = *NODE_SHIFT_BITS;
-        let node_bits = *NODES_BITS;
-        let superblock_size = *SUPERBLOCK_SIZE;
-        let pivot_pos = chunk_size >> 1;
-        let data_mask = !(pivot_pos - 1);
-        let numa_id_encoding_mask = !(!0 >> node_bits << node_bits) << node_shift_bits;
-        let addr_shifted = (addr + pivot_pos) & !numa_id_encoding_mask & data_mask;
-        let mut cpu_heap_addr = 0;
-        for numa_id in 0..*NUM_NUMA_NODES {
-            let node_offset = numa_id << node_shift_bits;
-            let node_base = addr_shifted + node_offset;
-            let data_base = node_base + self_size_with_padding;
-            let boundary = node_base + superblock_size - *SYS_PAGE_SIZE;
-            debug_assert_eq!(align_padding(data_base, CACHE_LINE_SIZE), 0);
-            debug_assert_eq!(addr_numa_id(data_base), numa_id);
-            debug_assert_eq!(addr_numa_id(boundary - 1), numa_id);
-            unsafe {
-                *(node_base as *mut Self) = Self {
-                    numa: numa_id,
-                    size,
-                    data_base,
-                    boundary,
-                    cpu,
-                    reservation: AtomicUsize::new(data_base),
-                    used: AtomicUsize::new(0),
-                    free_list: lflist::WordList::new(),
-                };
-            }
-            if numa_id == numa {
-                cpu_heap_addr = node_base;
-            } else {
-                PER_NODE_META[numa_id].size_class_list[tier].blocks.push(node_base);
-            }
+        let data_base = addr + self_size_with_padding;
+        let boundary = data_base + *SUPERBLOCK_SIZE;
+        let ptr = addr as *mut Self;
+
+        // ensure cache aligned
+        debug_assert_eq!(align_padding(data_base, CACHE_LINE_SIZE), 0);
+
+        unsafe {
+            (*ptr) = Self {
+                numa,
+                size,
+                data_base,
+                boundary,
+                cpu,
+                reservation: AtomicUsize::new(data_base),
+                used: AtomicUsize::new(0),
+                free_list: lflist::WordList::new(),
+            };
         }
-        cpu_heap_addr as *mut Self
+
+        return ptr;
     }
 
     fn allocate(&self) -> Option<usize> {
         let res = self.free_list.pop().or_else(|| loop {
             let addr = self.reservation.load(Relaxed);
-            debug_assert_eq!(addr_numa_id(self.data_base), self.numa);
             if addr >= self.boundary {
                 return None;
             } else {
                 let new_addr = addr + self.size;
-                debug_assert_eq!(addr_numa_id(addr), self.numa);
                 if self.reservation.compare_and_swap(addr, new_addr, Relaxed) == addr {
                     // insert to CPU cache to avoid synchronization
-                    let object_list = &PER_NODE_META[self.numa].objects;
-                    object_list.insert_to_cpu(addr, self as *const Self as usize, self.cpu);
+                    OBJECT_MAP.insert_to_cpu(addr, self as *const Self as usize, self.cpu);
                     return Some(addr);
                 }
             }
@@ -276,7 +245,6 @@ fn gen_numa_node_list() -> Vec<NodeMeta> {
         nodes.push(NodeMeta {
             size_class_list: size_classes(0, i),
             pending_free: lflist::WordList::new(),
-            objects: evmap::EvMap::new(),
         });
     }
     return nodes;
@@ -314,37 +282,7 @@ fn maximum_size() -> usize {
     2 << (NUM_SIZE_CLASS - 1)
 }
 
-#[inline]
-fn node_shift_bits() -> usize {
-    log_2_of(*SUPERBLOCK_SIZE)
-}
 
-fn chunk_offset_bits() -> usize {
-    log_2_of(*ADDRESSIBLE_CHUNK_SIZE)
-}
-
-#[inline]
-fn addr_numa_id(addr: usize) -> usize {
-    let node_shift_bits = *NODE_SHIFT_BITS;
-    let node_bit_mask = (1 << *NODES_BITS) - 1;
-    let shifted = addr >> node_shift_bits;
-    let masked = shifted & node_bit_mask;
-    masked
-}
-
-#[inline]
-fn addressable_chunk_size() -> usize {
-    let node_chunk_size = *SUPERBLOCK_SIZE;
-    let node_bits = *NODES_BITS;
-    node_chunk_size << (node_bits + 2)
-}
-
-fn node_bits() -> usize {
-    let num_nodes = *NUM_NUMA_NODES;
-    if num_nodes == 1 { return  1; }
-    let res = log_2_of(num_nodes);
-    res
-}
 
 fn gen_core_meta() -> Vec<CoreMeta> {
     (0..*NUM_CPU)
