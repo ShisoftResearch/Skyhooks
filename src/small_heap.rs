@@ -56,7 +56,7 @@ struct ThreadMeta {
 
 struct NodeMeta {
     size_class_list: TSizeClasses,
-    pending_free: RemoteNodeFree,
+    pending_free: lflist::WordList<BumpAllocator>,
     objects: evmap::EvMap,
 }
 
@@ -71,11 +71,6 @@ struct SizeClass {
 
 struct CoreMeta {
     size_class_list: TSizeClasses,
-}
-
-struct RemoteNodeFree {
-    pending_free: lflist::WordList<BumpAllocator>,
-    // sentinel_thread: thread::Thread,
 }
 
 pub fn allocate(size: usize) -> Ptr {
@@ -106,27 +101,33 @@ pub fn contains(ptr: Ptr) -> bool {
 }
 
 pub fn free(ptr: Ptr) -> bool {
+    let current_numa = THREAD_META.with(|meta| { meta.numa });
+    PER_NODE_META[current_numa].pending_free.drop_out_all(Some(|(addr, _)| {
+        debug_assert_eq!(addr_numa_id(addr), current_numa);
+        free(addr as Ptr);
+    }));
+
     let addr = ptr as usize;
-    let numa_id = addr_numa_id(addr);
-    let object_list = &PER_NODE_META[numa_id].objects;
-    THREAD_META.with(|meta| {
-        let current_node = meta.numa;
-        object_list.refresh();
-        PER_NODE_META[current_node].pending_free.free_all();
-        if let Some(superblock_addr) = object_list.get(addr) {
-            let superblock_ref = unsafe { & *(superblock_addr as *const SuperBlock) };
-            let obj_numa = superblock_ref.numa;
-            debug_assert_eq!(superblock_ref.tier, size_class_index_from_size(superblock_ref.size));
-            if superblock_ref.numa == current_node {
-                superblock_ref.dealloc(addr);
-            } else {
-                PER_NODE_META[obj_numa].pending_free.push(addr);
-            }
-            return true;
+    let obj_numa_id = addr_numa_id(addr);
+    let object_list = &PER_NODE_META[obj_numa_id].objects;
+    object_list.refresh();
+    if let Some(superblock_addr) = object_list.get(addr) {
+        let superblock_ref = unsafe { & *(superblock_addr as *const SuperBlock) };
+        debug_assert_eq!(addr_numa_id(addr), superblock_ref.numa);
+        debug_assert_eq!(
+            superblock_ref.tier, size_class_index_from_size(superblock_ref.size),
+            "Block tier {}, size: {}, index: {}", superblock_ref.tier,
+            superblock_ref.size, size_class_index_from_size(superblock_ref.size)
+        );
+        if superblock_ref.numa == current_numa {
+            superblock_ref.dealloc(addr);
         } else {
-            return false;
+            PER_NODE_META[obj_numa_id].pending_free.push(addr);
         }
-    })
+        return true;
+    } else {
+        return false;
+    }
 }
 pub fn size_of(ptr: Ptr) -> Option<usize> {
     let addr = ptr as usize;
@@ -188,23 +189,6 @@ impl SizeClass {
             };
             self.blocks.push(new_block);
         }
-    }
-}
-
-impl RemoteNodeFree {
-    pub fn new(node_id: usize) -> Self {
-        Self { pending_free: lflist::WordList::new() }
-    }
-
-    #[inline]
-    pub fn push(&self, addr: usize) {
-        self.pending_free.push(addr as usize);
-    }
-
-    pub fn free_all(&self) {
-        self.pending_free.drop_out_all(Some(|(addr, _)| {
-            free(addr as Ptr);
-        }));
     }
 }
 
@@ -296,7 +280,7 @@ fn gen_numa_node_list() -> Vec<NodeMeta> {
     for i in 0..num_nodes {
         nodes.push(NodeMeta {
             size_class_list: size_classes(0, i),
-            pending_free: RemoteNodeFree::new(i),
+            pending_free: lflist::WordList::new(),
             objects: evmap::EvMap::new(),
         });
     }
