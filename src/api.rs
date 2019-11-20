@@ -5,7 +5,8 @@ use core::alloc::{GlobalAlloc, Layout};
 use core::cell::Cell;
 use lfmap::{Map, WordMap};
 use libc::*;
-use std::ptr::null_mut;
+use std::ptr::{null_mut, NonNull};
+use std::alloc::{Alloc, AllocErr};
 
 thread_local! {
     pub static INNER_CALL: Cell<bool> = Cell::new(false);
@@ -87,5 +88,21 @@ unsafe impl GlobalAlloc for NullocAllocator {
         if let Some(base_addr) = RUST_ADDR_MAPPING.remove(addr) {
             nu_free(base_addr as Ptr)
         }
+    }
+}
+
+impl Default for NullocAllocator {
+    fn default() -> Self {
+        NullocAllocator
+    }
+}
+
+unsafe impl Alloc for NullocAllocator {
+    unsafe fn alloc(&mut self, layout: Layout) -> Result<NonNull<u8>, AllocErr> {
+        Ok(NonNull::new((self as &mut GlobalAlloc).alloc(layout)).unwrap())
+    }
+
+    unsafe fn dealloc(&mut self, ptr: NonNull<u8>, layout: Layout) {
+        (self as &mut GlobalAlloc).dealloc(ptr.as_ptr(), layout)
     }
 }

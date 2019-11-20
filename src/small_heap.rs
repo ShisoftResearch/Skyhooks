@@ -17,6 +17,7 @@ use std::os::unix::thread::JoinHandleExt;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;
 use std::thread;
+use std::alloc::GlobalAlloc;
 
 type TSizeClasses = [SizeClass; NUM_SIZE_CLASS];
 
@@ -230,6 +231,7 @@ impl SuperBlock {
         });
         if res.is_some() {
             self.used.fetch_add(self.size, Relaxed);
+            debug_validate(res.unwrap() as Ptr, self.size);
         }
         return res;
     }
@@ -308,6 +310,8 @@ fn gen_core_meta() -> Vec<CoreMeta> {
 #[cfg(test)]
 mod test {
     use crate::small_heap::{allocate, free};
+    use lfmap::Map;
+    use crate::api::NullocAllocator;
 
     #[test]
     pub fn general() {
@@ -328,5 +332,19 @@ mod test {
             }
         }
         assert_eq!(ptr, ptr2);
+    }
+
+    #[test]
+    pub fn application() {
+        let map = lfmap::WordMap::<NullocAllocator>::with_capacity(64);
+        for i in 5..10240 {
+            map.insert(i, i * 2);
+        }
+        for i in 5..10240 {
+            assert_eq!(map.get(i), Some(i * 2), "index: {}", i);
+        }
+        for i in 5..10240 {
+            assert_eq!(map.remove(i), Some(i * 2), "index: {}", i);
+        }
     }
 }
