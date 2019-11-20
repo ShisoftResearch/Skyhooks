@@ -74,7 +74,7 @@ struct CoreMeta {
 }
 
 struct RemoteNodeFree {
-    pending_free: Arc<lflist::WordList<BumpAllocator>>,
+    pending_free: lflist::WordList<BumpAllocator>,
     // sentinel_thread: thread::Thread,
 }
 
@@ -193,8 +193,7 @@ impl SizeClass {
 
 impl RemoteNodeFree {
     pub fn new(node_id: usize) -> Self {
-        let list = Arc::new(lflist::WordList::new());
-        Self { pending_free: list }
+        Self { pending_free: lflist::WordList::new() }
     }
 
     #[inline]
@@ -244,7 +243,7 @@ impl SuperBlock {
                 *(node_base as *mut Self) = Self {
                     tier,
                     numa: numa_id,
-                    cpu: if numa_id == numa { cpu } else { 0 },
+                    cpu,
                     size,
                     data_base,
                     boundary,
