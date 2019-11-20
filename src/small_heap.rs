@@ -106,6 +106,7 @@ pub fn free(ptr: Ptr) -> bool {
         if let Some(superblock_addr) = OBJECT_LIST.get(addr) {
             let superblock_ref = unsafe { & *(superblock_addr as *const SuperBlock) };
             let obj_numa = superblock_ref.numa;
+            debug_assert_eq!(superblock_ref.tier, size_class_index_from_size(superblock_ref.size));
             if superblock_ref.numa == current_node {
                 superblock_ref.dealloc(addr);
             } else {
@@ -270,7 +271,7 @@ fn size_classes(cpu: usize, numa: usize) -> TSizeClasses {
     for elem in &mut data[..] {
         *elem = MaybeUninit::new(SizeClass::new(tier, size, cpu, numa));
         tier += 1;
-        size << 1;
+        size <<= 1;
     }
     unsafe { mem::transmute::<_, TSizeClasses>(data) }
 }
