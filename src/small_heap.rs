@@ -33,7 +33,7 @@ lazy_static! {
 }
 
 struct SuperBlock {
-    head: usize,
+    data_base: usize,
     tier: usize,
     size: usize,
     numa: usize,
@@ -75,6 +75,7 @@ struct RemoteNodeFree {
 
 pub fn allocate(size: usize) -> Ptr {
     let size_class_index = size_class_index_from_size(size);
+    let max_size = *MAXIMUM_SIZE;
     debug_assert!(size <= *MAXIMUM_SIZE);
     THREAD_META.with(|meta| {
         let cpu_id = meta.cpu;
@@ -199,14 +200,15 @@ impl SuperBlock {
         let self_size_with_padding = self_size + padding;
         let total_size = self_size_with_padding + *SUPERBLOCK_SIZE;
         let addr = alloc_mem::<CacheLineType, BumpAllocator>(total_size);
+        let data_base = addr + self_size_with_padding;
         unsafe {
             *(addr as *mut Self) = Self {
                 tier,
                 numa,
                 size,
                 cpu,
-                head: addr + self_size_with_padding,
-                reservation: AtomicUsize::new(addr),
+                data_base,
+                reservation: AtomicUsize::new(data_base),
                 used: AtomicUsize::new(0),
                 free_list: lflist::WordList::new(),
             };
@@ -217,7 +219,7 @@ impl SuperBlock {
     fn allocate(&self) -> Option<usize> {
         let res = self.free_list.pop().or_else(|| loop {
             let addr = self.reservation.load(Relaxed);
-            if addr >= self.head + *SUPERBLOCK_SIZE {
+            if addr >= self.data_base + *SUPERBLOCK_SIZE {
                 return None;
             } else {
                 let new_addr = addr + self.size;
@@ -233,8 +235,8 @@ impl SuperBlock {
     }
 
     fn dealloc(&self, addr: usize) {
-        debug_assert!(addr >= self.head && addr < self.head + *SUPERBLOCK_SIZE);
-        debug_assert_eq!((addr - self.head) % self.size, 0);
+        debug_assert!(addr >= self.data_base && addr < self.data_base + *SUPERBLOCK_SIZE);
+        debug_assert_eq!((addr - self.data_base) % self.size, 0);
         self.free_list.push(addr);
         self.used.fetch_sub(self.size, Relaxed);
     }
@@ -292,7 +294,7 @@ fn min_power_of_2(mut n: usize) -> usize {
 
 #[inline]
 fn maximum_size() -> usize {
-    size_classes(0, 0)[NUM_SIZE_CLASS - 1].size
+    2 << (NUM_SIZE_CLASS - 1)
 }
 
 fn gen_core_meta() -> Vec<CoreMeta> {
