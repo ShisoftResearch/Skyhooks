@@ -25,7 +25,6 @@ use crate::collections::fixvec::FixedVec;
 
 const EMPTY_SLOT: usize = 0;
 const SENTINEL_SLOT: usize = 1;
-const CACHE_LINE_SIZE: usize = 64;
 
 const EXCHANGE_EMPTY: usize = 0;
 const EXCHANGE_WAITING: usize = 1;
@@ -64,6 +63,11 @@ pub struct List<T: Default + Copy, A: Alloc + Default = Global> {
     count: AtomicUsize,
     buffer_cap: usize,
     exchange: ExchangeArray<T, A>
+}
+
+pub struct ListIterator<T: Default + Copy, A: Alloc + Default> {
+    buffer: BufferRef<T, A>,
+    current: usize
 }
 
 impl<T: Default + Copy, A: Alloc + Default> List<T, A> {
@@ -355,6 +359,14 @@ impl<T: Default + Copy, A: Alloc + Default> List<T, A> {
     pub fn count(&self) -> usize {
         self.count.load(Relaxed)
     }
+
+    pub fn iter(&self) -> ListIterator<T, A> {
+        let buffer = BufferMeta::borrow(self.head.load(Relaxed));
+        ListIterator {
+            current: buffer.head.load(Relaxed),
+            buffer
+        }
+    }
 }
 
 impl<T: Default + Copy, A: Alloc + Default> Drop for List<T, A> {
@@ -527,6 +539,36 @@ impl<T: Default, A: Alloc + Default> Deref for BufferRef<T, A> {
     }
 }
 
+impl <T: Default + Clone + Copy, A: Alloc + Default> Iterator for ListIterator<T, A> {
+    type Item = (usize, T);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if self.current == 0 {
+                let next_buffer_ptr = self.buffer.next.load(Relaxed);
+                if next_buffer_ptr == null_mut() {
+                    return None;
+                } else {
+                    self.buffer = BufferMeta::borrow(next_buffer_ptr);
+                    self.current = self.buffer.head.load(Relaxed);
+                    continue;
+                }
+            }
+            let current_flag_ptr = self.buffer.flag_ptr_of(self.current - 1);
+            unsafe {
+                let mut result = (*current_flag_ptr, T::default());
+                if mem::size_of::<T>() > 0 {
+                    result.1 = (*self.buffer.object_ptr_of(current_flag_ptr)).clone()
+                }
+                self.current -= 1;
+                if result.0 != EMPTY_SLOT && result.0 != SENTINEL_SLOT {
+                    return Some(result);
+                }
+            };
+        }
+    }
+}
+
 pub struct WordList<A: Alloc + Default = Global> {
     inner: List<(), A>,
 }
@@ -563,6 +605,9 @@ impl<A: Alloc + Default> WordList<A> {
     pub fn count(&self) -> usize {
         self.inner.count()
     }
+    pub fn iter(&self) -> ListIterator<(),A> {
+        self.inner.iter()
+    }
 }
 
 pub struct ObjectList<T: Default + Copy, A: Alloc + Default = Global> {
@@ -597,6 +642,9 @@ impl<T: Default + Copy, A: Alloc + Default> ObjectList<T, A> {
     }
     pub fn count(&self) -> usize {
         self.inner.count()
+    }
+    pub fn iter(&self) -> ListIterator<T,A> {
+        self.inner.iter()
     }
 }
 
@@ -760,6 +808,9 @@ mod test {
         }
         list.push(32);
         list.push(25);
+        let mut iter = list.iter();
+        assert_eq!(iter.next().unwrap().0, 25);
+        assert_eq!(iter.next().unwrap().0, 32);
         assert_eq!(list.count(), 2);
         let mut dropped = vec![];
         list.drop_out_all(Some(|x| { dropped.push(x); }));

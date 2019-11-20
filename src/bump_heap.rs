@@ -1,14 +1,11 @@
 // A simple bump heap allocator for internal use
-// Each allocation and free will produce a system call
+// Each allocation and free may produce a system call
 // Used virtual address will not be reclaimed
 // If the virtual address space is full and an allocation cannot been done on current address space,
 // new address space will be allocated from the system
 
-// Because we cannot use heap in this allocator, meta data will not be kept, dealloc will free
-// memory space immediately. It is very unsafe.
-
 use crate::collections::lflist;
-use crate::generic_heap::size_class_index_from_size;
+use crate::generic_heap::{size_class_index_from_size, NUM_SIZE_CLASS};
 use crate::mmap::{dealloc_regional, mmap_without_fd, munmap_memory};
 use crate::mmap_heap::*;
 use crate::utils::*;
@@ -21,7 +18,7 @@ use lfmap::Map;
 use libc::*;
 use std::mem::MaybeUninit;
 
-const BUMP_SIZE_CLASS: usize = 32;
+const BUMP_SIZE_CLASS: usize = NUM_SIZE_CLASS << 1;
 
 type SizeClasses = [SizeClass; BUMP_SIZE_CLASS];
 
@@ -230,7 +227,7 @@ pub fn size_of(ptr: Ptr) -> Option<usize> {
 
 #[inline]
 fn maximum_free_list_covered_size() -> usize {
-    size_classes()[BUMP_SIZE_CLASS - 1].size
+    2 << (BUMP_SIZE_CLASS - 1)
 }
 
 #[inline]
