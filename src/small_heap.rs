@@ -37,7 +37,6 @@ lazy_static! {
 }
 
 struct SuperBlock {
-    cpu:  usize,
     size: usize,
     data_base: usize,
     numa: usize,
@@ -63,7 +62,6 @@ struct SizeClass {
     tier: usize,
     size: usize,
     numa: usize,
-    cpu: usize,
     // SuperBlock ptr address list
     blocks: lflist::WordList<BumpAllocator>,
 }
@@ -148,12 +146,11 @@ impl ThreadMeta {
 }
 
 impl SizeClass {
-    pub fn new(tier: usize, size: usize, cpu: usize, numa: usize) -> Self {
+    pub fn new(tier: usize, size: usize, numa: usize) -> Self {
         debug_assert!(size > 1);
         Self {
             tier,
             size,
-            cpu,
             numa,
             blocks: WordList::new(),
         }
@@ -176,12 +173,11 @@ impl SizeClass {
                 .pop()
             {
                 let superblock_ref = unsafe { &mut *(numa_common_block as *mut SuperBlock) };
-                superblock_ref.cpu = self.cpu;
                 debug_assert_eq!(superblock_ref.numa, self.numa);
                 numa_common_block
             } else {
                 debug_assert!(self.size > 1);
-                SuperBlock::new(self.tier, self.cpu, self.numa, self.size) as usize
+                SuperBlock::new(self.tier, self.numa, self.size) as usize
             };
             self.blocks.push(new_block);
         }
@@ -189,7 +185,7 @@ impl SizeClass {
 }
 
 impl SuperBlock {
-    pub fn new(tier: usize, cpu :usize, numa: usize, size: usize) -> *mut Self {
+    pub fn new(tier: usize, numa: usize, size: usize) -> *mut Self {
         // created a cache aligned super block
         // super block will not deallocated
 
@@ -222,7 +218,6 @@ impl SuperBlock {
             unsafe {
                 *(node_base as *mut Self) = Self {
                     numa: numa_id,
-                    cpu,
                     size,
                     data_base,
                     boundary,
@@ -288,7 +283,7 @@ fn size_classes(cpu: usize, numa: usize) -> TSizeClasses {
     let mut size = 2;
     let mut tier = 0;
     for elem in &mut data[..] {
-        *elem = MaybeUninit::new(SizeClass::new(tier, size, cpu, numa));
+        *elem = MaybeUninit::new(SizeClass::new(tier, size, numa));
         tier += 1;
         size <<= 1;
     }
