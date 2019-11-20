@@ -106,28 +106,27 @@ pub fn contains(ptr: Ptr) -> bool {
 }
 
 pub fn free(ptr: Ptr) -> bool {
-//    let addr = ptr as usize;
-//    let numa_id = addr_numa_id(addr);
-//    let object_list = &PER_NODE_META[numa_id].objects;
-//    THREAD_META.with(|meta| {
-//        let current_node = meta.numa;
-//        object_list.refresh();
-//        PER_NODE_META[current_node].pending_free.free_all();
-//        if let Some(superblock_addr) = object_list.get(addr) {
-//            let superblock_ref = unsafe { & *(superblock_addr as *const SuperBlock) };
-//            let obj_numa = superblock_ref.numa;
-//            debug_assert_eq!(superblock_ref.tier, size_class_index_from_size(superblock_ref.size));
-//            if superblock_ref.numa == current_node {
-//                superblock_ref.dealloc(addr);
-//            } else {
-//                PER_NODE_META[obj_numa].pending_free.push(addr);
-//            }
-//            return true;
-//        } else {
-//            return false;
-//        }
-//    })
-    true
+    let addr = ptr as usize;
+    let numa_id = addr_numa_id(addr);
+    let object_list = &PER_NODE_META[numa_id].objects;
+    THREAD_META.with(|meta| {
+        let current_node = meta.numa;
+        object_list.refresh();
+        PER_NODE_META[current_node].pending_free.free_all();
+        if let Some(superblock_addr) = object_list.get(addr) {
+            let superblock_ref = unsafe { & *(superblock_addr as *const SuperBlock) };
+            let obj_numa = superblock_ref.numa;
+            debug_assert_eq!(superblock_ref.tier, size_class_index_from_size(superblock_ref.size));
+            if superblock_ref.numa == current_node {
+                superblock_ref.dealloc(addr);
+            } else {
+                PER_NODE_META[obj_numa].pending_free.push(addr);
+            }
+            return true;
+        } else {
+            return false;
+        }
+    })
 }
 pub fn size_of(ptr: Ptr) -> Option<usize> {
     let addr = ptr as usize;
@@ -169,8 +168,9 @@ impl SizeClass {
         loop {
             for (block_addr, _) in self.blocks.iter() {
                 let superblock = unsafe { &*(block_addr as *mut SuperBlock) };
-                assert_eq!(superblock.numa, self.numa);
+                debug_assert_eq!(superblock.numa, self.numa);
                 if let Some(addr) = superblock.allocate() {
+                    debug_assert_eq!(addr_numa_id(addr), self.numa);
                     return (addr, block_addr);
                 }
             }
@@ -181,7 +181,7 @@ impl SizeClass {
             {
                 let superblock_ref = unsafe { &mut *(numa_common_block as *mut SuperBlock) };
                 superblock_ref.cpu = self.cpu;
-                assert_eq!(superblock_ref.numa, self.numa);
+                debug_assert_eq!(superblock_ref.numa, self.numa);
                 numa_common_block
             } else {
                 SuperBlock::new(self.tier, self.cpu, self.numa, self.size) as usize
@@ -228,14 +228,18 @@ impl SuperBlock {
         let node_bits = *NODES_BITS;
         let superblock_size = *SUPERBLOCK_SIZE;
         let pivot_pos = chunk_size >> 1;
+        let data_mask = !(pivot_pos - 1);
         let numa_id_encoding_mask = !(!0 >> node_bits << node_bits) << node_shift_bits;
-        let addr_shifted = (addr + pivot_pos) & !numa_id_encoding_mask;
+        let addr_shifted = (addr + pivot_pos) & !numa_id_encoding_mask & data_mask;
         let mut cpu_heap_addr = 0;
         for numa_id in 0..*NUM_NUMA_NODES {
             let node_offset = numa_id << node_shift_bits;
             let node_base = addr_shifted + node_offset;
             let data_base = node_base + self_size_with_padding;
+            let boundary = node_base + superblock_size;
             debug_assert_eq!(align_padding(data_base, CACHE_LINE_SIZE), 0);
+            debug_assert_eq!(addr_numa_id(data_base), numa_id);
+            debug_assert_eq!(addr_numa_id(boundary - 1), numa_id);
             unsafe {
                 *(node_base as *mut Self) = Self {
                     tier,
@@ -243,7 +247,7 @@ impl SuperBlock {
                     cpu: if numa_id == numa { cpu } else { 0 },
                     size,
                     data_base,
-                    boundary: node_base + superblock_size,
+                    boundary,
                     reservation: AtomicUsize::new(data_base),
                     used: AtomicUsize::new(0),
                     free_list: lflist::WordList::new(),
@@ -261,10 +265,12 @@ impl SuperBlock {
     fn allocate(&self) -> Option<usize> {
         let res = self.free_list.pop().or_else(|| loop {
             let addr = self.reservation.load(Relaxed);
+            debug_assert_eq!(addr_numa_id(self.data_base), self.numa);
             if addr >= self.boundary {
                 return None;
             } else {
                 let new_addr = addr + self.size;
+                debug_assert_eq!(addr_numa_id(addr), self.numa);
                 if self.reservation.compare_and_swap(addr, new_addr, Relaxed) == addr {
                     return Some(addr);
                 }
@@ -343,7 +349,9 @@ fn chunk_offset_bits() -> usize {
 fn addr_numa_id(addr: usize) -> usize {
     let node_shift_bits = *NODE_SHIFT_BITS;
     let node_bit_mask = (1 << *NODES_BITS) - 1;
-    addr >> node_shift_bits & node_bit_mask
+    let shifted = addr >> node_shift_bits;
+    let masked = shifted & node_bit_mask;
+    masked
 }
 
 #[inline]
