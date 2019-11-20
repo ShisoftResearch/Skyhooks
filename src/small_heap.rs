@@ -37,6 +37,7 @@ lazy_static! {
 }
 
 struct SuperBlock {
+    cpu: usize,
     size: usize,
     data_base: usize,
     numa: usize,
@@ -62,6 +63,7 @@ struct SizeClass {
     tier: usize,
     size: usize,
     numa: usize,
+    cpu: usize,
     // SuperBlock ptr address list
     blocks: lflist::WordList<BumpAllocator>,
 }
@@ -77,14 +79,11 @@ pub fn allocate(size: usize) -> Ptr {
     THREAD_META.with(|meta| {
         let cpu_id = meta.cpu;
         let cpu_meta = &PER_CPU_META[cpu_id];
-        let object_list = &PER_NODE_META[meta.numa].objects;
         // allocate memory from per-CPU size class list
         let superblock = &cpu_meta.size_class_list[size_class_index];
         let (addr, block) = superblock.allocate();
         debug_assert_eq!(superblock.numa, meta.numa);
         debug_assert_eq!(addr_numa_id(addr), meta.numa);
-        // insert to CPU cache to avoid synchronization
-        object_list.insert_to_cpu(addr, block, cpu_id);
         return addr as Ptr;
     })
 }
@@ -146,12 +145,13 @@ impl ThreadMeta {
 }
 
 impl SizeClass {
-    pub fn new(tier: usize, size: usize, numa: usize) -> Self {
+    pub fn new(tier: usize, size: usize, cpu: usize, numa: usize) -> Self {
         debug_assert!(size > 1);
         Self {
             tier,
             size,
             numa,
+            cpu,
             blocks: WordList::new(),
         }
     }
@@ -174,10 +174,11 @@ impl SizeClass {
             {
                 let superblock_ref = unsafe { &mut *(numa_common_block as *mut SuperBlock) };
                 debug_assert_eq!(superblock_ref.numa, self.numa);
+                superblock_ref.cpu = self.cpu;
                 numa_common_block
             } else {
                 debug_assert!(self.size > 1);
-                SuperBlock::new(self.tier, self.numa, self.size) as usize
+                SuperBlock::new(self.tier, self.cpu, self.numa, self.size) as usize
             };
             self.blocks.push(new_block);
         }
@@ -185,7 +186,7 @@ impl SizeClass {
 }
 
 impl SuperBlock {
-    pub fn new(tier: usize, numa: usize, size: usize) -> *mut Self {
+    pub fn new(tier: usize, cpu: usize, numa: usize, size: usize) -> *mut Self {
         // created a cache aligned super block
         // super block will not deallocated
 
@@ -221,6 +222,7 @@ impl SuperBlock {
                     size,
                     data_base,
                     boundary,
+                    cpu,
                     reservation: AtomicUsize::new(data_base),
                     used: AtomicUsize::new(0),
                     free_list: lflist::WordList::new(),
@@ -245,6 +247,9 @@ impl SuperBlock {
                 let new_addr = addr + self.size;
                 debug_assert_eq!(addr_numa_id(addr), self.numa);
                 if self.reservation.compare_and_swap(addr, new_addr, Relaxed) == addr {
+                    // insert to CPU cache to avoid synchronization
+                    let object_list = &PER_NODE_META[self.numa].objects;
+                    object_list.insert_to_cpu(addr, self as *const Self as usize, self.cpu);
                     return Some(addr);
                 }
             }
@@ -283,7 +288,7 @@ fn size_classes(cpu: usize, numa: usize) -> TSizeClasses {
     let mut size = 2;
     let mut tier = 0;
     for elem in &mut data[..] {
-        *elem = MaybeUninit::new(SizeClass::new(tier, size, numa));
+        *elem = MaybeUninit::new(SizeClass::new(tier, size, cpu, numa));
         tier += 1;
         size <<= 1;
     }
