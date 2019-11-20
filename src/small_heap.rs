@@ -80,9 +80,11 @@ pub fn allocate(size: usize) -> Ptr {
         let (addr, block) = superblock.allocate();
         debug_assert_eq!(superblock.numa, meta.numa);
         debug_assert_eq!(unsafe { &*(block as *const SuperBlock) }.numa, meta.numa);
-        if cfg!(debug_assertions) && size >= CACHE_LINE_SIZE {
-            // ensure all address are cache aligned
-            debug_assert_eq!(align_padding(addr, CACHE_LINE_SIZE), 0);
+        if cfg!(debug_assertions) {
+            debug_check_cache_aligned(addr, size, 8);
+            debug_check_cache_aligned(addr, size, 16);
+            debug_check_cache_aligned(addr, size, 32);
+            debug_check_cache_aligned(addr, size, CACHE_LINE_SIZE);
         }
         return addr as Ptr;
     })
@@ -297,6 +299,13 @@ fn gen_core_meta() -> Vec<CoreMeta> {
             size_class_list: size_classes(cpu_id, SYS_CPU_NODE[&cpu_id]),
         })
         .collect()
+}
+
+fn debug_check_cache_aligned(addr: usize, size: usize, align: usize) {
+    if  size >= align {
+        // ensure all address are cache aligned
+        debug_assert_eq!(align_padding(addr, align), 0);
+    }
 }
 
 #[cfg(test)]
