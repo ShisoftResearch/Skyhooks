@@ -29,8 +29,8 @@ const SENTINEL_SLOT: usize = 1;
 const EXCHANGE_EMPTY: usize = 0;
 const EXCHANGE_WAITING: usize = 1;
 const EXCHANGE_BUSY: usize = 2;
-const EXCHANGE_SPIN_CYCLES: usize = 200;
-const CONGESTION_REF: usize = 2;
+const EXCHANGE_SPIN_CYCLES: usize = 300;
+const CONGESTION_REF: usize = 3;
 
 type ExchangeData<T> = Option<(usize, T)>;
 
@@ -757,7 +757,7 @@ unsafe impl <T: Default + Copy> Send for ExchangeSlot<T> {}
 
 impl <T: Default + Copy, A: Alloc + Default> ExchangeArray <T, A> {
     pub fn new() -> Self {
-        Self::with_capacity(8)
+        Self::with_capacity(4)
     }
 
     pub fn with_capacity(cap: usize) -> Self {

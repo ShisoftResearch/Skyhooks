@@ -79,6 +79,7 @@ pub fn allocate(size: usize) -> Ptr {
         let superblock = &cpu_meta.size_class_list[size_class_index];
         let (addr, block) = superblock.allocate();
         debug_assert_eq!(superblock.numa, meta.numa);
+        debug_assert_eq!(unsafe { &*(block as *const SuperBlock) }.numa, meta.numa);
         return addr as Ptr;
     })
 }
@@ -92,11 +93,13 @@ pub fn contains(ptr: Ptr) -> bool {
 pub fn free(ptr: Ptr) -> bool {
     let current_numa = THREAD_META.with(|meta| { meta.numa });
     PER_NODE_META[current_numa].pending_free.drop_out_all(Some(|(addr, _)| {
-        free(addr as Ptr);
+        if let Some(superblock_addr) = OBJECT_MAP.get(addr) {
+            let superblock_ref = unsafe { & *(superblock_addr as *const SuperBlock) };
+            superblock_ref.dealloc(addr);
+        }
     }));
-
-    let addr = ptr as usize;
     OBJECT_MAP.refresh();
+    let addr = ptr as usize;
     if let Some(superblock_addr) = OBJECT_MAP.get(addr) {
         let superblock_ref = unsafe { & *(superblock_addr as *const SuperBlock) };
         if superblock_ref.numa == current_numa {
@@ -217,7 +220,7 @@ impl SuperBlock {
             } else {
                 let new_addr = addr + self.size;
                 if self.reservation.compare_and_swap(addr, new_addr, Relaxed) == addr {
-                    // insert to CPU cache to avoid synchronization
+                    // insert to per CPU cache to avoid synchronization
                     OBJECT_MAP.insert_to_cpu(addr, self as *const Self as usize, self.cpu);
                     return Some(addr);
                 }
