@@ -221,7 +221,7 @@ impl SuperBlock {
             let node_offset = numa_id << node_shift_bits;
             let node_base = addr_shifted + node_offset;
             let data_base = node_base + self_size_with_padding;
-            let boundary = node_base + superblock_size;
+            let boundary = node_base + superblock_size - *SYS_PAGE_SIZE;
             debug_assert_eq!(align_padding(data_base, CACHE_LINE_SIZE), 0);
             debug_assert_eq!(addr_numa_id(data_base), numa_id);
             debug_assert_eq!(addr_numa_id(boundary - 1), numa_id);
