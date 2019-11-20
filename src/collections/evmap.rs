@@ -5,11 +5,11 @@ use core::cell::Cell;
 use lfmap::{Map, ObjectMap, WordMap};
 use std::marker::PhantomData;
 use std::mem;
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicUsize, AtomicBool};
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;
 
-type EvBins = Arc<Vec<lflist::ObjectList<(usize, usize)>>>;
+type EvBins = Arc<Vec<EvBin>>;
 
 #[derive(Clone)]
 pub struct Producer {
@@ -21,11 +21,15 @@ pub struct EvMap {
     source: EvBins,
 }
 
+struct EvBin {
+    list: lflist::ObjectList<(usize, usize)>,
+}
+
 impl EvMap {
     pub fn new() -> Self {
         let mut source = Vec::with_capacity(*NUM_CPU);
         for _ in 0..*NUM_CPU {
-            source.push(lflist::ObjectList::new());
+            source.push(EvBin::new());
         }
         Self {
             map: WordMap::with_capacity(4096),
@@ -42,17 +46,14 @@ impl EvMap {
     pub fn refresh(&self) {
         // get all items from producers and insert into the local map
         self.source.iter().for_each(|p| {
-            p.drop_out_all(Some(|(_, (k, v))| {
+            p.list.drop_out_all(Some(|(_, (k, v))| {
                 self.map.insert(k, v);
             }));
         });
     }
 
     pub fn insert_to_cpu(&self, key: usize, value: usize, cpu_id: usize) {
-        if key == 0 {
-            panic!();
-        }
-        self.source[cpu_id].push((key, value));
+        self.source[cpu_id].push(key, value);
     }
 
     #[inline]
@@ -85,9 +86,18 @@ impl Producer {
     }
     #[inline]
     pub fn insert_to_cpu(&self, key: usize, value: usize, cpu_id: usize) {
-        if key == 0 {
-            panic!();
+        self.cache[cpu_id].push(key, value);
+    }
+}
+
+impl EvBin {
+    pub fn new() -> Self {
+        Self {
+            list: lflist::ObjectList::with_capacity(128)
         }
-        self.cache[cpu_id].push((key, value));
+    }
+
+    pub fn push(&self, key: usize, value: usize) {
+        self.list.push((key, value));
     }
 }

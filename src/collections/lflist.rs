@@ -163,6 +163,7 @@ impl<T: Default + Copy, A: Alloc + Default> List<T, A> {
             let page = BufferMeta::borrow(head_ptr);
             let slot_pos = page.head.load(Relaxed);
             let next_pos = slot_pos + 1;
+            let reference = page.refs.load(Relaxed);
             if next_pos > self.buffer_cap {
                 // buffer overflow, make new and link to last buffer
                 let new_head = BufferMeta::new(self.buffer_cap);
@@ -174,8 +175,8 @@ impl<T: Default + Copy, A: Alloc + Default> List<T, A> {
                 }
                 // either case, retry
             } else {
-                let slot_ptr = page.flag_ptr_of(slot_pos);
                 page.head.store(next_pos, Relaxed);
+                let slot_ptr = page.flag_ptr_of(slot_pos);
                 unsafe {
                     if obj_size != 0 {
                         let obj_ptr = page.object_ptr_of(slot_ptr);
@@ -184,7 +185,7 @@ impl<T: Default + Copy, A: Alloc + Default> List<T, A> {
                     intrinsics::atomic_store_relaxed(slot_ptr, flag);
                 }
                 self.count.fetch_add(1, Relaxed);
-                break;
+                return;
             }
             backoff.spin();
         }
