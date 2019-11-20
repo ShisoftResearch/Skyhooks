@@ -174,9 +174,10 @@ mod test {
     use rand_xoshiro::Xoroshiro64StarStar;
     use rand_xorshift::XorShiftRng;
     use lfmap::{WordMap, Map};
-    use std::alloc::System;
+    use std::alloc::{System, GlobalAlloc, Layout};
     use std::collections::HashMap;
     use crate::collections::lflist::WordList;
+    use crate::api::NullocAllocator;
 
     #[test]
     fn numa_nodes() {
@@ -293,6 +294,16 @@ mod test {
         b.iter(|| {
             list.exclusive_push(i);
             i += 1;
+        });
+    }
+
+    #[bench]
+    fn alloc(b: &mut Bencher) {
+        let allocator = NullocAllocator;
+        b.iter(|| {
+            unsafe {
+               allocator.alloc(Layout::from_size_align(1, 1).unwrap());
+            }
         });
     }
 }
