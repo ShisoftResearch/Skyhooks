@@ -123,7 +123,11 @@ pub fn free(ptr: Ptr) -> bool {
     })
 }
 pub fn size_of(ptr: Ptr) -> Option<usize> {
-    unimplemented!()
+    OBJECT_LIST.refresh();
+    OBJECT_LIST.get(ptr as usize).map(|superblock_addr| {
+        let superblock_ref = unsafe { & *(superblock_addr as *const SuperBlock) };
+        superblock_ref.size
+    })
 }
 
 impl ThreadMeta {
