@@ -205,7 +205,7 @@ impl SuperBlock {
         let padding = align_padding(self_size, CACHE_LINE_SIZE);
         let self_size_with_padding = self_size + padding;
         let total_size = self_size_with_padding + *SUPERBLOCK_SIZE;
-        let addr = alloc_mem::<CacheLineType, BumpAllocator>(total_size);
+        let addr = mmap_without_fd(total_size) as usize;
         let data_base = addr + self_size_with_padding;
         unsafe {
             *(addr as *mut Self) = Self {
