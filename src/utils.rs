@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::fs::read_dir;
 
 pub const CACHE_LINE_SIZE: usize = 64;
+pub type CacheLineType = (usize, usize, usize, usize, usize, usize, usize, usize);
 
 lazy_static! {
     pub static ref SYS_PAGE_SIZE: usize = unsafe { sysconf(_SC_PAGESIZE) as usize };
