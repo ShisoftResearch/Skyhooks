@@ -155,6 +155,7 @@ impl ThreadMeta {
 
 impl SizeClass {
     pub fn new(tier: usize, size: usize, cpu: usize, numa: usize) -> Self {
+        debug_assert!(size > 1);
         Self {
             tier,
             size,
@@ -185,6 +186,7 @@ impl SizeClass {
                 debug_assert_eq!(superblock_ref.numa, self.numa);
                 numa_common_block
             } else {
+                debug_assert!(self.size > 1);
                 SuperBlock::new(self.tier, self.cpu, self.numa, self.size) as usize
             };
             self.blocks.push(new_block);
