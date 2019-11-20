@@ -32,7 +32,7 @@ lazy_static! {
     static ref SUPERBLOCK_SIZE: usize = *MAXIMUM_SIZE << 2;
     static ref NODE_SHIFT_BITS: usize = node_shift_bits();
     static ref ADDRESSIBLE_CHUNK_SIZE: usize = addressable_chunk_size();
-    static ref ADDRESSIBLE_CHUNK_BITMASK: usize = chunk_offset_bit_mask();
+    static ref ADDRESSIBLE_CHUNK_BITS: usize = chunk_offset_bits();
     pub static ref MAXIMUM_SIZE: usize = maximum_size();
 }
 
@@ -106,27 +106,28 @@ pub fn contains(ptr: Ptr) -> bool {
 }
 
 pub fn free(ptr: Ptr) -> bool {
-    let addr = ptr as usize;
-    let numa_id = addr_numa_id(addr);
-    let object_list = &PER_NODE_META[numa_id].objects;
-    THREAD_META.with(|meta| {
-        let current_node = meta.numa;
-        object_list.refresh();
-        PER_NODE_META[current_node].pending_free.free_all();
-        if let Some(superblock_addr) = object_list.get(addr) {
-            let superblock_ref = unsafe { & *(superblock_addr as *const SuperBlock) };
-            let obj_numa = superblock_ref.numa;
-            debug_assert_eq!(superblock_ref.tier, size_class_index_from_size(superblock_ref.size));
-            if superblock_ref.numa == current_node {
-                superblock_ref.dealloc(addr);
-            } else {
-                PER_NODE_META[obj_numa].pending_free.push(addr);
-            }
-            return true;
-        } else {
-            return false;
-        }
-    })
+//    let addr = ptr as usize;
+//    let numa_id = addr_numa_id(addr);
+//    let object_list = &PER_NODE_META[numa_id].objects;
+//    THREAD_META.with(|meta| {
+//        let current_node = meta.numa;
+//        object_list.refresh();
+//        PER_NODE_META[current_node].pending_free.free_all();
+//        if let Some(superblock_addr) = object_list.get(addr) {
+//            let superblock_ref = unsafe { & *(superblock_addr as *const SuperBlock) };
+//            let obj_numa = superblock_ref.numa;
+//            debug_assert_eq!(superblock_ref.tier, size_class_index_from_size(superblock_ref.size));
+//            if superblock_ref.numa == current_node {
+//                superblock_ref.dealloc(addr);
+//            } else {
+//                PER_NODE_META[obj_numa].pending_free.push(addr);
+//            }
+//            return true;
+//        } else {
+//            return false;
+//        }
+//    })
+    true
 }
 pub fn size_of(ptr: Ptr) -> Option<usize> {
     let addr = ptr as usize;
@@ -168,6 +169,7 @@ impl SizeClass {
         loop {
             for (block_addr, _) in self.blocks.iter() {
                 let superblock = unsafe { &*(block_addr as *mut SuperBlock) };
+                assert_eq!(superblock.numa, self.numa);
                 if let Some(addr) = superblock.allocate() {
                     return (addr, block_addr);
                 }
@@ -179,6 +181,7 @@ impl SizeClass {
             {
                 let superblock_ref = unsafe { &mut *(numa_common_block as *mut SuperBlock) };
                 superblock_ref.cpu = self.cpu;
+                assert_eq!(superblock_ref.numa, self.numa);
                 numa_common_block
             } else {
                 SuperBlock::new(self.tier, self.cpu, self.numa, self.size) as usize
@@ -221,13 +224,12 @@ impl SuperBlock {
         let self_size_with_padding = self_size + padding;
         let chunk_size = *ADDRESSIBLE_CHUNK_SIZE;
         let addr = mmap_without_fd(chunk_size) as usize;
-        let addr_tailing_zeros = addr.trailing_zeros();
-        let chunk_size_tailing_zeros = chunk_size.trailing_zeros();
         let node_shift_bits = *NODE_SHIFT_BITS;
         let node_bits = *NODES_BITS;
         let superblock_size = *SUPERBLOCK_SIZE;
+        let pivot_pos = chunk_size >> 1;
         let numa_id_encoding_mask = !(!0 >> node_bits << node_bits) << node_shift_bits;
-        let addr_shifted = addr & !numa_id_encoding_mask;
+        let addr_shifted = (addr + pivot_pos) & !numa_id_encoding_mask;
         let mut cpu_heap_addr = 0;
         for numa_id in 0..*NUM_NUMA_NODES {
             let node_offset = numa_id << node_shift_bits;
@@ -333,24 +335,22 @@ fn node_shift_bits() -> usize {
     log_2_of(*SUPERBLOCK_SIZE)
 }
 
-fn chunk_offset_bit_mask() -> usize {
-    log_2_of(*SUPERBLOCK_SIZE) + node_bits()
+fn chunk_offset_bits() -> usize {
+    log_2_of(*ADDRESSIBLE_CHUNK_SIZE)
 }
 
 #[inline]
 fn addr_numa_id(addr: usize) -> usize {
-    let bit_mask = *ADDRESSIBLE_CHUNK_BITMASK;
-    let offset = addr & bit_mask;
-    let shift_bits = *NODE_SHIFT_BITS;
-    let res = offset >> shift_bits;
-    res
+    let node_shift_bits = *NODE_SHIFT_BITS;
+    let node_bit_mask = (1 << *NODES_BITS) - 1;
+    addr >> node_shift_bits & node_bit_mask
 }
 
 #[inline]
 fn addressable_chunk_size() -> usize {
     let node_chunk_size = *SUPERBLOCK_SIZE;
     let node_bits = *NODES_BITS;
-    node_chunk_size << node_bits + 1
+    node_chunk_size << (node_bits + 2)
 }
 
 fn node_bits() -> usize {
