@@ -87,9 +87,11 @@ pub fn allocate(size: usize) -> Ptr {
         let cpu_meta = &PER_CPU_META[cpu_id];
         let object_list = &PER_NODE_META[meta.numa].objects;
         // allocate memory from per-CPU size class list
-        let (addr, block) = cpu_meta.size_class_list[size_class_index].allocate();
-        // insert to CPU cache to avoid synchronization
+        let superblock = &cpu_meta.size_class_list[size_class_index];
+        let (addr, block) = superblock.allocate();
+        debug_assert_eq!(superblock.numa, meta.numa);
         debug_assert_eq!(addr_numa_id(addr), meta.numa);
+        // insert to CPU cache to avoid synchronization
         object_list.insert_to_cpu(addr, block, cpu_id);
         return addr as Ptr;
     })
@@ -219,11 +221,17 @@ impl SuperBlock {
         let self_size_with_padding = self_size + padding;
         let chunk_size = *ADDRESSIBLE_CHUNK_SIZE;
         let addr = mmap_without_fd(chunk_size) as usize;
+        let addr_tailing_zeros = addr.trailing_zeros();
+        let chunk_size_tailing_zeros = chunk_size.trailing_zeros();
+        let node_shift_bits = *NODE_SHIFT_BITS;
+        let node_bits = *NODES_BITS;
+        let superblock_size = *SUPERBLOCK_SIZE;
+        let numa_id_encoding_mask = !(!0 >> node_bits << node_bits) << node_shift_bits;
+        let addr_shifted = addr & !numa_id_encoding_mask;
         let mut cpu_heap_addr = 0;
         for numa_id in 0..*NUM_NUMA_NODES {
-            let node_shift_bits = *NODE_SHIFT_BITS;
             let node_offset = numa_id << node_shift_bits;
-            let node_base = addr + node_offset;
+            let node_base = addr_shifted + node_offset;
             let data_base = node_base + self_size_with_padding;
             debug_assert_eq!(align_padding(data_base, CACHE_LINE_SIZE), 0);
             unsafe {
@@ -233,7 +241,7 @@ impl SuperBlock {
                     cpu: if numa_id == numa { cpu } else { 0 },
                     size,
                     data_base,
-                    boundary: node_base + *SUPERBLOCK_SIZE,
+                    boundary: node_base + superblock_size,
                     reservation: AtomicUsize::new(data_base),
                     used: AtomicUsize::new(0),
                     free_list: lflist::WordList::new(),
@@ -348,7 +356,8 @@ fn addressable_chunk_size() -> usize {
 fn node_bits() -> usize {
     let num_nodes = *NUM_NUMA_NODES;
     if num_nodes == 1 { return  1; }
-    log_2_of(num_nodes)
+    let res = log_2_of(num_nodes);
+    res
 }
 
 fn gen_core_meta() -> Vec<CoreMeta> {
