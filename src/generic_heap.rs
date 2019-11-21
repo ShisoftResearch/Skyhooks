@@ -70,7 +70,9 @@ pub unsafe fn realloc(ptr: Ptr, size: Size) -> Ptr {
 #[inline]
 pub fn size_class_index_from_size(size: usize) -> usize {
     debug_assert!(size > 0);
-    if size < 2 { return 0; }
+    if size < 2 {
+        return 0;
+    }
     let log = log_2_of(size);
     if is_power_of_2(size) && log > 0 {
         log - 1

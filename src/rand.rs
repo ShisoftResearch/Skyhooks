@@ -2,13 +2,13 @@ use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{fence, AtomicUsize};
 
 pub struct XorRand {
-    x: AtomicUsize
+    x: AtomicUsize,
 }
 
 impl XorRand {
     pub fn new(seed: usize) -> Self {
         Self {
-            x: AtomicUsize::new(seed)
+            x: AtomicUsize::new(seed),
         }
     }
 

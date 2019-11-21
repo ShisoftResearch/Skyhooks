@@ -11,13 +11,13 @@ use core::mem::MaybeUninit;
 use core::sync::atomic::AtomicUsize;
 use crossbeam_queue::SegQueue;
 use lfmap::{Map, ObjectMap, WordMap};
+use std::alloc::GlobalAlloc;
 use std::cell::{Cell, RefCell};
 use std::clone::Clone;
 use std::os::unix::thread::JoinHandleExt;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;
 use std::thread;
-use std::alloc::GlobalAlloc;
 
 type TSizeClasses = [SizeClass; NUM_SIZE_CLASS];
 
@@ -97,17 +97,19 @@ pub fn contains(ptr: Ptr) -> bool {
 }
 
 pub fn free(ptr: Ptr) -> bool {
-    let current_numa = THREAD_META.with(|meta| { meta.numa });
-    PER_NODE_META[current_numa].pending_free.drop_out_all(Some(|(addr, _)| {
-        if let Some(superblock_addr) = OBJECT_MAP.get(addr) {
-            let superblock_ref = unsafe { & *(superblock_addr as *const SuperBlock) };
-            superblock_ref.dealloc(addr);
-        }
-    }));
+    let current_numa = THREAD_META.with(|meta| meta.numa);
+    PER_NODE_META[current_numa]
+        .pending_free
+        .drop_out_all(Some(|(addr, _)| {
+            if let Some(superblock_addr) = OBJECT_MAP.get(addr) {
+                let superblock_ref = unsafe { &*(superblock_addr as *const SuperBlock) };
+                superblock_ref.dealloc(addr);
+            }
+        }));
     OBJECT_MAP.refresh();
     let addr = ptr as usize;
     if let Some(superblock_addr) = OBJECT_MAP.get(addr) {
-        let superblock_ref = unsafe { & *(superblock_addr as *const SuperBlock) };
+        let superblock_ref = unsafe { &*(superblock_addr as *const SuperBlock) };
         if superblock_ref.numa == current_numa {
             superblock_ref.dealloc(addr);
         } else {
@@ -122,7 +124,7 @@ pub fn size_of(ptr: Ptr) -> Option<usize> {
     let addr = ptr as usize;
     OBJECT_MAP.refresh();
     OBJECT_MAP.get(ptr as usize).map(|superblock_addr| {
-        let superblock_ref = unsafe { & *(superblock_addr as *const SuperBlock) };
+        let superblock_ref = unsafe { &*(superblock_addr as *const SuperBlock) };
         superblock_ref.size
     })
 }
@@ -291,8 +293,6 @@ fn maximum_size() -> usize {
     2 << (NUM_SIZE_CLASS - 1)
 }
 
-
-
 fn gen_core_meta() -> Vec<CoreMeta> {
     (0..*NUM_CPU)
         .map(|cpu_id| CoreMeta {
@@ -302,7 +302,7 @@ fn gen_core_meta() -> Vec<CoreMeta> {
 }
 
 fn debug_check_cache_aligned(addr: usize, size: usize, align: usize) {
-    if  size >= align {
+    if size >= align {
         // ensure all address are cache aligned
         debug_assert_eq!(align_padding(addr, align), 0);
     }
@@ -310,9 +310,9 @@ fn debug_check_cache_aligned(addr: usize, size: usize, align: usize) {
 
 #[cfg(test)]
 mod test {
+    use crate::api::NullocAllocator;
     use crate::small_heap::{allocate, free};
     use lfmap::Map;
-    use crate::api::NullocAllocator;
 
     #[test]
     pub fn general() {

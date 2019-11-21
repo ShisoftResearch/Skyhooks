@@ -1,27 +1,27 @@
 // usize lock-free, wait free paged linked list stack
 
+use crate::collections::fixvec::FixedVec;
+use crate::rand::XorRand;
 use crate::utils::*;
 use core::alloc::Alloc;
 use core::ptr;
 use core::{intrinsics, mem};
+use crossbeam::atomic::AtomicCell;
 use crossbeam::utils::Backoff;
+use rand::prelude::*;
+use rand_xoshiro::Xoroshiro64StarStar;
 use std::alloc::Global;
+use std::borrow::{Borrow, BorrowMut};
+use std::cell::{Cell, UnsafeCell};
+use std::cmp::{max, min};
+use std::hint::unreachable_unchecked;
 use std::intrinsics::size_of;
-use std::ops::{Deref, Add};
+use std::marker::PhantomData;
+use std::mem::transmute;
+use std::ops::{Add, Deref};
 use std::ptr::null_mut;
 use std::sync::atomic::Ordering::{Relaxed, SeqCst};
 use std::sync::atomic::{fence, AtomicPtr, AtomicUsize};
-use std::borrow::{Borrow, BorrowMut};
-use std::cell::{UnsafeCell, Cell};
-use crossbeam::atomic::AtomicCell;
-use std::hint::unreachable_unchecked;
-use rand_xoshiro::Xoroshiro64StarStar;
-use std::mem::transmute;
-use rand::prelude::*;
-use std::cmp::{min, max};
-use std::marker::PhantomData;
-use crate::rand::XorRand;
-use crate::collections::fixvec::FixedVec;
 
 const EMPTY_SLOT: usize = 0;
 const SENTINEL_SLOT: usize = 1;
@@ -34,7 +34,6 @@ const CONGESTION_REF: usize = 3;
 
 type ExchangeData<T> = Option<(usize, T)>;
 
-
 struct BufferMeta<T: Default, A: Alloc + Default> {
     head: AtomicUsize,
     next: AtomicPtr<BufferMeta<T, A>>,
@@ -42,32 +41,32 @@ struct BufferMeta<T: Default, A: Alloc + Default> {
     upper_bound: usize,
     lower_bound: usize,
     tuple_size: usize,
-    total_size: usize
+    total_size: usize,
 }
 
 pub struct ExchangeSlot<T: Default + Copy> {
     state: AtomicUsize,
     data: UnsafeCell<Option<ExchangeData<T>>>,
-    data_state: AtomicUsize
+    data_state: AtomicUsize,
 }
 
 pub struct ExchangeArray<T: Default + Copy, A: Alloc + Default> {
     slots: FixedVec<ExchangeSlot<T>, A>,
     rand: XorRand,
     shadow: PhantomData<A>,
-    capacity: usize
+    capacity: usize,
 }
 
 pub struct List<T: Default + Copy, A: Alloc + Default = Global> {
     head: AtomicPtr<BufferMeta<T, A>>,
     count: AtomicUsize,
     buffer_cap: usize,
-    exchange: ExchangeArray<T, A>
+    exchange: ExchangeArray<T, A>,
 }
 
 pub struct ListIterator<T: Default + Copy, A: Alloc + Default> {
     buffer: BufferRef<T, A>,
-    current: usize
+    current: usize,
 }
 
 impl<T: Default + Copy, A: Alloc + Default> List<T, A> {
@@ -120,11 +119,12 @@ impl<T: Default + Copy, A: Alloc + Default> List<T, A> {
                             let obj_ptr = page.object_ptr_of(slot_ptr);
                             ptr::write(obj_ptr, data);
                         }
-                        let slot_flag = intrinsics::atomic_cxchg_relaxed(slot_ptr, EMPTY_SLOT, flag).0;
+                        let slot_flag =
+                            intrinsics::atomic_cxchg_relaxed(slot_ptr, EMPTY_SLOT, flag).0;
                         assert_eq!(
-                            slot_flag,
-                            EMPTY_SLOT,
-                            "Cannot swap flag for push. Flag is {} expect empty", slot_flag
+                            slot_flag, EMPTY_SLOT,
+                            "Cannot swap flag for push. Flag is {} expect empty",
+                            slot_flag
                         );
                     }
                     return;
@@ -136,11 +136,11 @@ impl<T: Default + Copy, A: Alloc + Default> List<T, A> {
                         // exchanged a push, reset this push parameters
                         flag = tuple.0;
                         data = tuple.1;
-                    },
+                    }
                     Ok(None) => {
                         // pushed to other popping thread
                         return;
-                    },
+                    }
                     Err(Some(tuple)) => {
                         // failed exchange, parameters have been returned
                         flag = tuple.0;
@@ -173,7 +173,7 @@ impl<T: Default + Copy, A: Alloc + Default> List<T, A> {
                 if self.head.compare_and_swap(head_ptr, new_head, Relaxed) != head_ptr {
                     BufferMeta::unref(new_head);
                 }
-                // either case, retry
+            // either case, retry
             } else {
                 page.head.store(next_pos, Relaxed);
                 let slot_ptr = page.flag_ptr_of(slot_pos);
@@ -222,12 +222,15 @@ impl<T: Default + Copy, A: Alloc + Default> List<T, A> {
                     // This approach may break ordering but we have no other choice here and
                     // the side effect is not significant to its use case
                     drop(page);
-                    let dropped_next =
-                        BufferMeta::drop_out(head_ptr, &mut Some(|(flag, data)| {
+                    let dropped_next = BufferMeta::drop_out(
+                        head_ptr,
+                        &mut Some(|(flag, data)| {
                             if flag != EMPTY_SLOT && flag != SENTINEL_SLOT {
                                 self.do_push(flag, data); // push without bump counter
                             }
-                        }), &mut 0);
+                        }),
+                        &mut 0,
+                    );
                     debug_assert_eq!(dropped_next.unwrap_or(null_mut()), next_buffer_ptr);
                     // don't need to unref here for drop out did this for us
                 }
@@ -245,11 +248,10 @@ impl<T: Default + Copy, A: Alloc + Default> List<T, A> {
                     {
                         res = Some((new_slot_flag, T::default()));
                         if obj_size != 0 && new_slot_flag != SENTINEL_SLOT {
-                            res.as_mut()
-                                .map(|(_, obj)| unsafe {
-                                    let obj_ptr = page.object_ptr_of(new_slot_ptr) as *mut T;
-                                    *obj =  ptr::read(obj_ptr as *mut T)
-                                });
+                            res.as_mut().map(|(_, obj)| unsafe {
+                                let obj_ptr = page.object_ptr_of(new_slot_ptr) as *mut T;
+                                *obj = ptr::read(obj_ptr as *mut T)
+                            });
                         }
                         let swapped = page.head.compare_and_swap(slot, new_slot, Relaxed);
                         debug_assert!(
@@ -281,10 +283,10 @@ impl<T: Default + Copy, A: Alloc + Default> List<T, A> {
                         // exchanged a push, return it
                         self.count.fetch_sub(1, Relaxed);
                         return Some(tuple);
-                    },
+                    }
                     Ok(None) => {
                         // meet another pop
-                    },
+                    }
                     Err(Some(tuple)) => {
                         self.count.fetch_sub(1, Relaxed);
                         return Some(tuple);
@@ -296,7 +298,10 @@ impl<T: Default + Copy, A: Alloc + Default> List<T, A> {
             }
         }
     }
-    pub fn drop_out_all<F>(&self, mut retain: Option<F>) where F: FnMut((usize, T)) {
+    pub fn drop_out_all<F>(&self, mut retain: Option<F>)
+    where
+        F: FnMut((usize, T)),
+    {
         let count = self.count.load(Relaxed);
         if count == 0 {
             return;
@@ -365,7 +370,7 @@ impl<T: Default + Copy, A: Alloc + Default> List<T, A> {
         let buffer = BufferMeta::borrow(self.head.load(Relaxed));
         ListIterator {
             current: buffer.head.load(Relaxed),
-            buffer
+            buffer,
         }
     }
 }
@@ -390,11 +395,15 @@ impl<T: Default, A: Alloc + Default> BufferMeta<T, A> {
         let slots_size = mem::size_of::<usize>();
         let data_size = mem::size_of::<T>();
         let tuple_size = slots_size + data_size;
-        let tuple_size_aligned =
-            if tuple_size <= 8 { 8 }
-            else if tuple_size <= 16 { 16 }
-            else if tuple_size <= 32 { 32 }
-            else { tuple_size + align_padding(tuple_size, CACHE_LINE_SIZE) };
+        let tuple_size_aligned = if tuple_size <= 8 {
+            8
+        } else if tuple_size <= 16 {
+            16
+        } else if tuple_size <= 32 {
+            32
+        } else {
+            tuple_size + align_padding(tuple_size, CACHE_LINE_SIZE)
+        };
         let total_size = meta_size + tuple_size_aligned * buffer_cap;
         let head_page = alloc_mem::<T, A>(total_size) as *mut Self;
         let head_page_addr = head_page as usize;
@@ -406,7 +415,7 @@ impl<T: Default, A: Alloc + Default> BufferMeta<T, A> {
             upper_bound: head_page_addr + total_size,
             lower_bound: slots_start,
             tuple_size,
-            total_size
+            total_size,
         };
         head_page
     }
@@ -432,7 +441,10 @@ impl<T: Default, A: Alloc + Default> BufferMeta<T, A> {
 
     // only use when the buffer is about to be be dead
     // this require reference checking
-    fn flush_buffer<F>(buffer: &Self, retain: &mut Option<F>, counter: &mut usize) where F: FnMut((usize, T)) {
+    fn flush_buffer<F>(buffer: &Self, retain: &mut Option<F>, counter: &mut usize)
+    where
+        F: FnMut((usize, T)),
+    {
         let size_of_obj = mem::size_of::<T>();
         let data_bound = buffer.head.load(Relaxed);
         let mut slot_addr = buffer.lower_bound;
@@ -463,7 +475,10 @@ impl<T: Default, A: Alloc + Default> BufferMeta<T, A> {
         buffer_ptr: *mut Self,
         retain: &mut Option<F>,
         counter: &mut usize,
-    ) -> Option<*mut Self> where F: FnMut((usize, T)) {
+    ) -> Option<*mut Self>
+    where
+        F: FnMut((usize, T)),
+    {
         let buffer = BufferMeta::borrow(buffer_ptr);
         let next_ptr = buffer.next.load(Relaxed);
         let backoff = Backoff::new();
@@ -540,7 +555,7 @@ impl<T: Default, A: Alloc + Default> Deref for BufferRef<T, A> {
     }
 }
 
-impl <T: Default + Clone + Copy, A: Alloc + Default> Iterator for ListIterator<T, A> {
+impl<T: Default + Clone + Copy, A: Alloc + Default> Iterator for ListIterator<T, A> {
     type Item = (usize, T);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -597,7 +612,10 @@ impl<A: Alloc + Default> WordList<A> {
         self.inner.pop().map(|(data, _)| data)
     }
 
-    pub fn drop_out_all<F>(&self, retain: Option<F>) where F: FnMut((usize, ()))  {
+    pub fn drop_out_all<F>(&self, retain: Option<F>)
+    where
+        F: FnMut((usize, ())),
+    {
         self.inner.drop_out_all(retain);
     }
     pub fn prepend_with(&self, other: &Self) {
@@ -606,7 +624,7 @@ impl<A: Alloc + Default> WordList<A> {
     pub fn count(&self) -> usize {
         self.inner.count()
     }
-    pub fn iter(&self) -> ListIterator<(),A> {
+    pub fn iter(&self) -> ListIterator<(), A> {
         self.inner.iter()
     }
 }
@@ -634,7 +652,10 @@ impl<T: Default + Copy, A: Alloc + Default> ObjectList<T, A> {
         self.inner.pop().map(|(_, obj)| obj)
     }
 
-    pub fn drop_out_all<F>(&self, retain: Option<F>) where F: Fn((usize, T)) {
+    pub fn drop_out_all<F>(&self, retain: Option<F>)
+    where
+        F: Fn((usize, T)),
+    {
         self.inner.drop_out_all(retain)
     }
 
@@ -644,17 +665,17 @@ impl<T: Default + Copy, A: Alloc + Default> ObjectList<T, A> {
     pub fn count(&self) -> usize {
         self.inner.count()
     }
-    pub fn iter(&self) -> ListIterator<T,A> {
+    pub fn iter(&self) -> ListIterator<T, A> {
         self.inner.iter()
     }
 }
 
-impl <T: Default + Copy> ExchangeSlot<T> {
+impl<T: Default + Copy> ExchangeSlot<T> {
     fn new() -> Self {
         Self {
             state: AtomicUsize::new(EXCHANGE_EMPTY),
             data: UnsafeCell::new(None),
-            data_state: AtomicUsize::new(EXCHANGE_EMPTY)
+            data_state: AtomicUsize::new(EXCHANGE_EMPTY),
         }
     }
 
@@ -666,7 +687,11 @@ impl <T: Default + Copy> ExchangeSlot<T> {
         let mut data_content_mut = unsafe { &mut *self.data.get() };
         if state == EXCHANGE_EMPTY {
             self.wait_state_data_until(state, &backoff);
-            if self.state.compare_and_swap(EXCHANGE_EMPTY, EXCHANGE_WAITING, Relaxed) == EXCHANGE_EMPTY {
+            if self
+                .state
+                .compare_and_swap(EXCHANGE_EMPTY, EXCHANGE_WAITING, Relaxed)
+                == EXCHANGE_EMPTY
+            {
                 self.store_state_data(Some(data));
                 let mut wait_counting = 0;
                 loop {
@@ -690,15 +715,19 @@ impl <T: Default + Copy> ExchangeSlot<T> {
                         }
                     } else {
                         // no other thead come and take over, return input
-                        assert_eq!(self.state.load(Relaxed), EXCHANGE_EMPTY, "Bad state after bail");
-                        let mut returned_data_state =  None;
+                        assert_eq!(
+                            self.state.load(Relaxed),
+                            EXCHANGE_EMPTY,
+                            "Bad state after bail"
+                        );
+                        let mut returned_data_state = None;
                         self.swap_state_data(&mut returned_data_state);
                         if let Some(returned_data) = returned_data_state {
-//                            assert_eq!(
-//                                returned_data.as_ref().map(|(f, _)| *f), origin_data_flag,
-//                                "return check error. Current state: {}, in state {}",
-//                                self.state.load(Relaxed), state
-//                            );
+                            //                            assert_eq!(
+                            //                                returned_data.as_ref().map(|(f, _)| *f), origin_data_flag,
+                            //                                "return check error. Current state: {}, in state {}",
+                            //                                self.state.load(Relaxed), state
+                            //                            );
                             return Err(returned_data);
                         } else {
                             unreachable!()
@@ -710,7 +739,11 @@ impl <T: Default + Copy> ExchangeSlot<T> {
             }
         } else if state == EXCHANGE_WAITING {
             // find a pair, get it first
-            if self.state.compare_and_swap(EXCHANGE_WAITING, EXCHANGE_BUSY, Relaxed) == EXCHANGE_WAITING {
+            if self
+                .state
+                .compare_and_swap(EXCHANGE_WAITING, EXCHANGE_BUSY, Relaxed)
+                == EXCHANGE_WAITING
+            {
                 self.wait_state_data_until(EXCHANGE_WAITING, &backoff);
                 let mut data_result = Some(data);
                 self.swap_state_data(&mut data_result);
@@ -725,7 +758,11 @@ impl <T: Default + Copy> ExchangeSlot<T> {
         } else if state == EXCHANGE_BUSY {
             return Err(data);
         } else {
-            unreachable!("Got state {}, real state {}", state, self.state.load(Relaxed));
+            unreachable!(
+                "Got state {}, real state {}",
+                state,
+                self.state.load(Relaxed)
+            );
         }
     }
 
@@ -753,10 +790,10 @@ impl <T: Default + Copy> ExchangeSlot<T> {
     }
 }
 
-unsafe impl <T: Default + Copy> Sync for ExchangeSlot<T> {}
-unsafe impl <T: Default + Copy> Send for ExchangeSlot<T> {}
+unsafe impl<T: Default + Copy> Sync for ExchangeSlot<T> {}
+unsafe impl<T: Default + Copy> Send for ExchangeSlot<T> {}
 
-impl <T: Default + Copy, A: Alloc + Default> ExchangeArray <T, A> {
+impl<T: Default + Copy, A: Alloc + Default> ExchangeArray<T, A> {
     pub fn new() -> Self {
         Self::with_capacity(4)
     }
@@ -770,7 +807,7 @@ impl <T: Default + Copy, A: Alloc + Default> ExchangeArray <T, A> {
             slots,
             rand: XorRand::new(cap),
             shadow: PhantomData,
-            capacity: cap
+            capacity: cap,
         }
     }
 
@@ -781,18 +818,18 @@ impl <T: Default + Copy, A: Alloc + Default> ExchangeArray <T, A> {
     }
 }
 
-unsafe impl <T: Default + Copy, A: Alloc + Default> Send for ExchangeArray <T, A> {}
-unsafe impl <T: Default + Copy, A: Alloc + Default> Sync for ExchangeArray <T, A> {}
+unsafe impl<T: Default + Copy, A: Alloc + Default> Send for ExchangeArray<T, A> {}
+unsafe impl<T: Default + Copy, A: Alloc + Default> Sync for ExchangeArray<T, A> {}
 
 #[cfg(test)]
 mod test {
     use crate::collections::lflist::*;
     use crate::utils::SYS_PAGE_SIZE;
     use std::alloc::Global;
-    use std::sync::{Arc, Mutex};
-    use std::thread;
     use std::collections::BTreeSet;
     use std::sync::atomic::Ordering::Relaxed;
+    use std::sync::{Arc, Mutex};
+    use std::thread;
 
     #[test]
     pub fn general() {
@@ -814,20 +851,20 @@ mod test {
         assert_eq!(iter.next().unwrap().0, 32);
         assert_eq!(list.count(), 2);
         let mut dropped = vec![];
-        list.drop_out_all(Some(|x| { dropped.push(x); }));
+        list.drop_out_all(Some(|x| {
+            dropped.push(x);
+        }));
         assert_eq!(dropped, vec![(25, ()), (32, ())]);
         assert_eq!(list.count(), 0);
     }
 
     #[test]
-    pub fn parallel_insertion() {
-
-    }
+    pub fn parallel_insertion() {}
 
     #[test]
     pub fn parallel() {
         let page_size = *SYS_PAGE_SIZE;
-        let list = Arc::new(ObjectList::<usize,Global>::with_capacity(64));
+        let list = Arc::new(ObjectList::<usize, Global>::with_capacity(64));
         let mut threads = (2..page_size)
             .map(|i| {
                 let list = list.clone();
@@ -898,14 +935,21 @@ mod test {
         let hit_count = Arc::new(AtomicUsize::new(0));
         let hit_count_1 = hit_count.clone();
         let hit_count_2 = hit_count.clone();
-        assert_eq!(exchg.exchange(Some((0, ()))), Err(Some((0, ()))), "No paring exchange shall return the parameter");
+        assert_eq!(
+            exchg.exchange(Some((0, ()))),
+            Err(Some((0, ()))),
+            "No paring exchange shall return the parameter"
+        );
         let th1 = thread::spawn(move || {
             for i in 0..attempt_cycles {
                 let res = exchg_2.exchange(Some((i, ())));
                 if res.is_ok() {
                     hit_count_2.fetch_add(1, Relaxed);
                 }
-                assert!(sum_board_2.lock().unwrap().insert(res.unwrap_or_else(|err| err)));
+                assert!(sum_board_2
+                    .lock()
+                    .unwrap()
+                    .insert(res.unwrap_or_else(|err| err)));
             }
         });
         let th2 = thread::spawn(move || {
@@ -914,7 +958,10 @@ mod test {
                 if res.is_ok() {
                     hit_count_1.fetch_add(1, Relaxed);
                 }
-                assert!(sum_board_1.lock().unwrap().insert(res.unwrap_or_else(|err| err)));
+                assert!(sum_board_1
+                    .lock()
+                    .unwrap()
+                    .insert(res.unwrap_or_else(|err| err)));
             }
         });
         th1.join();
@@ -922,7 +969,11 @@ mod test {
         assert!(hit_count.load(Relaxed) > 0);
         assert_eq!(sum_board.lock().unwrap().len(), attempt_cycles * 2);
         for i in 0..attempt_cycles * 2 {
-            assert!(sum_board.lock().unwrap().contains(&Some((i, ()))), "expecting {} but not found", i);
+            assert!(
+                sum_board.lock().unwrap().contains(&Some((i, ()))),
+                "expecting {} but not found",
+                i
+            );
         }
     }
 }

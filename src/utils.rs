@@ -167,17 +167,17 @@ pub fn debug_validate(ptr: Ptr, size: Size) -> Ptr {
 
 #[cfg(test)]
 mod test {
+    use crate::api::NullocAllocator;
+    use crate::collections::lflist::WordList;
+    use lfmap::{Map, WordMap};
+    use rand::{thread_rng, Rng, SeedableRng};
+    use rand_xorshift::XorShiftRng;
+    use rand_xoshiro::Xoroshiro64StarStar;
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::collections::HashMap;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering::Relaxed;
     use test::Bencher;
-    use rand::{thread_rng, SeedableRng, Rng};
-    use rand_xoshiro::Xoroshiro64StarStar;
-    use rand_xorshift::XorShiftRng;
-    use lfmap::{WordMap, Map};
-    use std::alloc::{System, GlobalAlloc, Layout};
-    use std::collections::HashMap;
-    use crate::collections::lflist::WordList;
-    use crate::api::NullocAllocator;
 
     #[test]
     fn numa_nodes() {
@@ -300,10 +300,8 @@ mod test {
     #[bench]
     fn alloc(b: &mut Bencher) {
         let allocator = NullocAllocator;
-        b.iter(|| {
-            unsafe {
-               allocator.alloc(Layout::from_size_align(1, 1).unwrap());
-            }
+        b.iter(|| unsafe {
+            allocator.alloc(Layout::from_size_align(1, 1).unwrap());
         });
     }
 }

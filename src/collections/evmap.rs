@@ -5,15 +5,15 @@ use core::cell::Cell;
 use lfmap::{Map, ObjectMap, WordMap};
 use std::marker::PhantomData;
 use std::mem;
-use std::sync::atomic::{AtomicUsize, AtomicBool};
 use std::sync::atomic::Ordering::Relaxed;
+use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::Arc;
 
 type EvBins = Arc<Vec<EvBin>>;
 
 #[derive(Clone)]
 pub struct Producer {
-    cache: EvBins
+    cache: EvBins,
 }
 
 pub struct EvMap {
@@ -93,7 +93,7 @@ impl Producer {
 impl EvBin {
     pub fn new() -> Self {
         Self {
-            list: lflist::ObjectList::with_capacity(128)
+            list: lflist::ObjectList::with_capacity(128),
         }
     }
 
