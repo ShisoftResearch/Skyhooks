@@ -406,7 +406,7 @@ impl<T: Default, A: Alloc + Default> BufferMeta<T, A> {
             tuple_size + align_padding(tuple_size, CACHE_LINE_SIZE)
         };
         let total_size = meta_size + tuple_size_aligned * buffer_cap;
-        let head_page = alloc_mem::<T, A>(total_size) as *mut Self;
+        let head_page = alloc_mem::<A>(total_size) as *mut Self;
         let head_page_addr = head_page as usize;
         let slots_start = head_page_addr + meta_size;
         *(unsafe { &mut *head_page }) = Self {
@@ -437,7 +437,7 @@ impl<T: Default, A: Alloc + Default> BufferMeta<T, A> {
         if mem::needs_drop::<T>() {
             Self::flush_buffer(buffer_ref, &mut Some(|x| drop(x)), &mut 0);
         }
-        dealloc_mem::<T, A>(buffer as usize, total_size)
+        dealloc_mem::<A>(buffer as usize, total_size)
     }
 
     // only use when the buffer is about to be be dead

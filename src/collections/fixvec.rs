@@ -17,7 +17,7 @@ impl<T, A: Alloc + Default> FixedVec<T, A> {
         let obj_size = mem::size_of::<T>();
         let total_size = obj_size * cap;
         Self {
-            ptr: unsafe { alloc_mem::<T, A>(total_size) } as *mut T,
+            ptr: unsafe { alloc_mem::<A>(total_size) } as *mut T,
             shadow: PhantomData,
         }
     }
