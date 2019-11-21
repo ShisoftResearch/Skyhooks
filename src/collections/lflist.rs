@@ -795,7 +795,7 @@ unsafe impl<T: Default + Copy> Send for ExchangeSlot<T> {}
 
 impl<T: Default + Copy, A: Alloc + Default> ExchangeArray<T, A> {
     pub fn new() -> Self {
-        Self::with_capacity(4)
+        Self::with_capacity(8)
     }
 
     pub fn with_capacity(cap: usize) -> Self {
