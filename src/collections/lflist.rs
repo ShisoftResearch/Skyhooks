@@ -22,6 +22,7 @@ use std::ops::{Add, Deref};
 use std::ptr::null_mut;
 use std::sync::atomic::Ordering::{Relaxed, SeqCst};
 use std::sync::atomic::{fence, AtomicPtr, AtomicUsize};
+use std::time::Instant;
 
 const EMPTY_SLOT: usize = 0;
 const SENTINEL_SLOT: usize = 1;
@@ -29,7 +30,7 @@ const SENTINEL_SLOT: usize = 1;
 const EXCHANGE_EMPTY: usize = 0;
 const EXCHANGE_WAITING: usize = 1;
 const EXCHANGE_BUSY: usize = 2;
-const EXCHANGE_SPIN_CYCLES: usize = 150;
+const EXCHANGE_SPIN_WAIT_NS: usize = 150;
 const CONGESTION_REF: usize = 3;
 
 type ExchangeData<T> = Option<(usize, T)>;
@@ -306,7 +307,7 @@ impl<T: Default + Copy, A: Alloc + Default> List<T, A> {
         if count == 0 {
             return;
         }
-        let pop_threshold = self.buffer_cap >> 2;
+        let pop_threshold = self.buffer_cap >> 1;
         let pop_amount = pop_threshold << 1; // double of the threshold
         let retain = retain.borrow_mut();
         if count < pop_threshold {
@@ -693,14 +694,13 @@ impl<T: Default + Copy> ExchangeSlot<T> {
                 == EXCHANGE_EMPTY
             {
                 self.store_state_data(Some(data));
-                let mut wait_counting = 0;
+                let now = Instant::now();
                 loop {
                     // check if it can spin
-                    if wait_counting < EXCHANGE_SPIN_CYCLES
+                    if (now.elapsed().as_nanos() as usize) < EXCHANGE_SPIN_WAIT_NS
                         // if not, CAS to empty, can fail by other thread set BUSY
                         || self.state.compare_and_swap(EXCHANGE_WAITING, EXCHANGE_EMPTY, Relaxed) == EXCHANGE_BUSY
                     {
-                        wait_counting += 1;
                         if self.state.load(Relaxed) != EXCHANGE_BUSY {
                             continue;
                         }

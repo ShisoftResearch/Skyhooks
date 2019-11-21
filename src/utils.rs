@@ -178,6 +178,7 @@ mod test {
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering::Relaxed;
     use test::Bencher;
+    use std::time::Instant;
 
     #[test]
     fn numa_nodes() {
@@ -302,6 +303,14 @@ mod test {
         let allocator = NullocAllocator;
         b.iter(|| unsafe {
             allocator.alloc(Layout::from_size_align(1, 1).unwrap());
+        });
+    }
+
+    #[bench]
+    fn timing(b: &mut Bencher) {
+        let now = Instant::now();
+        b.iter(|| unsafe {
+            let _ = now.elapsed().as_nanos();
         });
     }
 }
