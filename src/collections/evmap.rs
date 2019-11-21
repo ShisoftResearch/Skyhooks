@@ -5,15 +5,18 @@ use core::cell::Cell;
 use lfmap::{Map, ObjectMap, WordMap};
 use std::marker::PhantomData;
 use std::mem;
-use std::sync::atomic::{AtomicUsize, AtomicBool};
 use std::sync::atomic::Ordering::Relaxed;
+use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::Arc;
+use std::cmp::min;
 
+const MAX_BINS: usize = 16;
+const BIN_INDEX_MASK: usize = MAX_BINS - 1;
 type EvBins = Arc<Vec<EvBin>>;
 
 #[derive(Clone)]
 pub struct Producer {
-    cache: EvBins
+    cache: EvBins,
 }
 
 pub struct EvMap {
@@ -27,8 +30,9 @@ struct EvBin {
 
 impl EvMap {
     pub fn new() -> Self {
-        let mut source = Vec::with_capacity(*NUM_CPU);
-        for _ in 0..*NUM_CPU {
+        let cap = min(*NUM_CPU, MAX_BINS);
+        let mut source = Vec::with_capacity(cap);
+        for _ in 0..cap {
             source.push(EvBin::new());
         }
         Self {
@@ -53,7 +57,7 @@ impl EvMap {
     }
 
     pub fn insert_to_cpu(&self, key: usize, value: usize, cpu_id: usize) {
-        self.source[cpu_id].push(key, value);
+        self.source[cpu_id & BIN_INDEX_MASK].push(key, value);
     }
 
     #[inline]
@@ -86,14 +90,14 @@ impl Producer {
     }
     #[inline]
     pub fn insert_to_cpu(&self, key: usize, value: usize, cpu_id: usize) {
-        self.cache[cpu_id].push(key, value);
+        self.cache[cpu_id & BIN_INDEX_MASK].push(key, value);
     }
 }
 
 impl EvBin {
     pub fn new() -> Self {
         Self {
-            list: lflist::ObjectList::with_capacity(128)
+            list: lflist::ObjectList::with_capacity(128),
         }
     }
 

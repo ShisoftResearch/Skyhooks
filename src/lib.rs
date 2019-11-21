@@ -11,10 +11,9 @@ extern crate alloc;
 extern crate lazy_static;
 #[macro_use]
 extern crate log;
+extern crate crossbeam;
 extern crate libc;
 extern crate test;
-extern crate crossbeam;
-
 
 pub mod api;
 mod bump_heap;
@@ -22,9 +21,9 @@ mod generic_heap;
 mod large_heap;
 mod mmap;
 mod mmap_heap;
+mod rand;
 mod small_heap;
 mod utils;
-mod rand;
 
 mod collections;
 

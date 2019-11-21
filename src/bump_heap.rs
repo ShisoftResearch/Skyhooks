@@ -143,13 +143,14 @@ unsafe impl GlobalAlloc for AllocatorInner {
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         let (actual_size, size_class_index) = self.size_of_object(&layout);
         let addr = ptr as usize;
-        if let Some(actual_addr) = self.address_map.remove(addr) {
+        if let Some(actual_addr) = self.address_map.get(addr) {
             let size_class_index = size_class_index_from_size(actual_size);
             if size_class_index < self.sizes.len() {
                 debug_validate(ptr as Ptr, actual_size);
                 self.sizes[size_class_index].free_list.push(actual_addr);
             } else {
                 // this may be a problem
+                self.address_map.remove(addr);
                 dealloc_regional(actual_addr as Ptr, actual_size);
             }
         }

@@ -5,8 +5,8 @@ use core::alloc::{GlobalAlloc, Layout};
 use core::cell::Cell;
 use lfmap::{Map, WordMap};
 use libc::*;
-use std::ptr::{null_mut, NonNull};
 use std::alloc::{Alloc, AllocErr};
+use std::ptr::{null_mut, NonNull};
 
 thread_local! {
     pub static INNER_CALL: Cell<bool> = Cell::new(false);
