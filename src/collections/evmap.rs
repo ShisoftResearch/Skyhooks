@@ -30,8 +30,9 @@ struct EvBin {
 
 impl EvMap {
     pub fn new() -> Self {
-        let mut source = Vec::with_capacity(min(*NUM_CPU, MAX_BINS));
-        for _ in 0..*NUM_CPU {
+        let cap = min(*NUM_CPU, MAX_BINS);
+        let mut source = Vec::with_capacity(cap);
+        for _ in 0..cap {
             source.push(EvBin::new());
         }
         Self {
