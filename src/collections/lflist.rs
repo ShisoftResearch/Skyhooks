@@ -35,7 +35,7 @@ const CONGESTION_REF: usize = 3;
 
 type ExchangeData<T> = Option<(usize, T)>;
 
-struct BufferMeta<T: Default, A: Alloc + Default> {
+struct BufferMeta<T: Default + Clone, A: Alloc + Default> {
     head: AtomicUsize,
     next: AtomicPtr<BufferMeta<T, A>>,
     refs: AtomicUsize,
@@ -45,32 +45,32 @@ struct BufferMeta<T: Default, A: Alloc + Default> {
     total_size: usize,
 }
 
-pub struct ExchangeSlot<T: Default + Copy> {
+pub struct ExchangeSlot<T: Default + Clone> {
     state: AtomicUsize,
     data: UnsafeCell<Option<ExchangeData<T>>>,
     data_state: AtomicUsize,
 }
 
-pub struct ExchangeArray<T: Default + Copy, A: Alloc + Default> {
+pub struct ExchangeArray<T: Default + Clone, A: Alloc + Default> {
     slots: FixedVec<ExchangeSlot<T>, A>,
     rand: XorRand,
     shadow: PhantomData<A>,
     capacity: usize,
 }
 
-pub struct List<T: Default + Copy, A: Alloc + Default = Global> {
+pub struct List<T: Default + Clone, A: Alloc + Default = Global> {
     head: AtomicPtr<BufferMeta<T, A>>,
     count: AtomicUsize,
     buffer_cap: usize,
     exchange: ExchangeArray<T, A>,
 }
 
-pub struct ListIterator<T: Default + Copy, A: Alloc + Default> {
+pub struct ListIterator<T: Default + Clone, A: Alloc + Default> {
     buffer: BufferRef<T, A>,
     current: usize,
 }
 
-impl<T: Default + Copy, A: Alloc + Default> List<T, A> {
+impl<T: Default + Clone, A: Alloc + Default> List<T, A> {
     pub fn new(buffer_cap: usize) -> Self {
         let first_buffer = BufferMeta::new(buffer_cap);
         Self {
@@ -132,7 +132,7 @@ impl<T: Default + Copy, A: Alloc + Default> List<T, A> {
                 }
             }
             if reference > CONGESTION_REF {
-                match self.exchange.exchange(Some((flag, data))) {
+                match self.exchange.exchange(Some((flag, data.clone()))) {
                     Ok(Some(tuple)) => {
                         // exchanged a push, reset this push parameters
                         flag = tuple.0;
@@ -376,7 +376,7 @@ impl<T: Default + Copy, A: Alloc + Default> List<T, A> {
     }
 }
 
-impl<T: Default + Copy, A: Alloc + Default> Drop for List<T, A> {
+impl<T: Default + Clone, A: Alloc + Default> Drop for List<T, A> {
     fn drop(&mut self) {
         unsafe {
             let mut node_ptr = self.head.load(Relaxed);
@@ -389,7 +389,7 @@ impl<T: Default + Copy, A: Alloc + Default> Drop for List<T, A> {
     }
 }
 
-impl<T: Default, A: Alloc + Default> BufferMeta<T, A> {
+impl<T: Default + Clone, A: Alloc + Default> BufferMeta<T, A> {
     pub fn new(buffer_cap: usize) -> *mut BufferMeta<T, A> {
         let self_size = mem::size_of::<Self>();
         let meta_size = self_size + align_padding(self_size, CACHE_LINE_SIZE);
@@ -538,17 +538,17 @@ impl<T: Default, A: Alloc + Default> BufferMeta<T, A> {
     }
 }
 
-struct BufferRef<T: Default, A: Alloc + Default> {
+struct BufferRef<T: Default + Clone, A: Alloc + Default> {
     ptr: *mut BufferMeta<T, A>,
 }
 
-impl<T: Default, A: Alloc + Default> Drop for BufferRef<T, A> {
+impl<T: Default + Clone, A: Alloc + Default> Drop for BufferRef<T, A> {
     fn drop(&mut self) {
         BufferMeta::unref(self.ptr);
     }
 }
 
-impl<T: Default, A: Alloc + Default> Deref for BufferRef<T, A> {
+impl<T: Default + Clone, A: Alloc + Default> Deref for BufferRef<T, A> {
     type Target = BufferMeta<T, A>;
 
     fn deref(&self) -> &Self::Target {
@@ -556,7 +556,7 @@ impl<T: Default, A: Alloc + Default> Deref for BufferRef<T, A> {
     }
 }
 
-impl<T: Default + Clone + Copy, A: Alloc + Default> Iterator for ListIterator<T, A> {
+impl<T: Default + Clone, A: Alloc + Default> Iterator for ListIterator<T, A> {
     type Item = (usize, T);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -630,11 +630,11 @@ impl<A: Alloc + Default> WordList<A> {
     }
 }
 
-pub struct ObjectList<T: Default + Copy, A: Alloc + Default = Global> {
+pub struct ObjectList<T: Default + Clone, A: Alloc + Default = Global> {
     inner: List<T, A>,
 }
 
-impl<T: Default + Copy, A: Alloc + Default> ObjectList<T, A> {
+impl<T: Default + Clone, A: Alloc + Default> ObjectList<T, A> {
     pub fn with_capacity(cap: usize) -> Self {
         Self {
             inner: List::new(cap),
@@ -671,7 +671,7 @@ impl<T: Default + Copy, A: Alloc + Default> ObjectList<T, A> {
     }
 }
 
-impl<T: Default + Copy> ExchangeSlot<T> {
+impl<T: Default + Clone> ExchangeSlot<T> {
     fn new() -> Self {
         Self {
             state: AtomicUsize::new(EXCHANGE_EMPTY),
@@ -767,8 +767,10 @@ impl<T: Default + Copy> ExchangeSlot<T> {
     }
 
     fn store_state_data(&self, data: Option<ExchangeData<T>>) {
-        let mut data_content_mut = unsafe { &mut *self.data.get() };
-        *data_content_mut = data;
+        fence(SeqCst);
+        unsafe {
+            ptr::write(self.data.get(), data);
+        }
         self.data_state.store(self.state.load(Relaxed), SeqCst);
     }
 
@@ -784,16 +786,17 @@ impl<T: Default + Copy> ExchangeSlot<T> {
     }
 
     fn swap_state_data(&self, data: &mut Option<ExchangeData<T>>) {
-        let mut data_content_mut = unsafe { &mut *self.data.get() };
-        mem::swap(data, data_content_mut);
+        unsafe {
+            ptr::swap(self.data.get(), data);
+        }
         self.data_state.store(self.state.load(Relaxed), SeqCst);
     }
 }
 
-unsafe impl<T: Default + Copy> Sync for ExchangeSlot<T> {}
-unsafe impl<T: Default + Copy> Send for ExchangeSlot<T> {}
+unsafe impl<T: Default + Clone> Sync for ExchangeSlot<T> {}
+unsafe impl<T: Default + Clone> Send for ExchangeSlot<T> {}
 
-impl<T: Default + Copy, A: Alloc + Default> ExchangeArray<T, A> {
+impl<T: Default + Clone, A: Alloc + Default> ExchangeArray<T, A> {
     pub fn new() -> Self {
         Self::with_capacity(8)
     }
@@ -818,8 +821,8 @@ impl<T: Default + Copy, A: Alloc + Default> ExchangeArray<T, A> {
     }
 }
 
-unsafe impl<T: Default + Copy, A: Alloc + Default> Send for ExchangeArray<T, A> {}
-unsafe impl<T: Default + Copy, A: Alloc + Default> Sync for ExchangeArray<T, A> {}
+unsafe impl<T: Default + Clone, A: Alloc + Default> Send for ExchangeArray<T, A> {}
+unsafe impl<T: Default + Clone, A: Alloc + Default> Sync for ExchangeArray<T, A> {}
 
 #[cfg(test)]
 mod test {

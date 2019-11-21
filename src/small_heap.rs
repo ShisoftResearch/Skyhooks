@@ -1,7 +1,7 @@
 use super::*;
 use crate::collections::evmap::Producer;
 use crate::collections::fixvec::FixedVec;
-use crate::collections::lflist::WordList;
+use crate::collections::lflist::{WordList, ObjectList};
 use crate::collections::{evmap, lflist};
 use crate::generic_heap::{log_2_of, size_class_index_from_size, ObjectMeta, NUM_SIZE_CLASS};
 use crate::mmap::mmap_without_fd;
@@ -18,6 +18,7 @@ use std::os::unix::thread::JoinHandleExt;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;
 use std::thread;
+use std::ptr::null;
 
 type TSizeClasses = [SizeClass; NUM_SIZE_CLASS];
 
@@ -39,8 +40,9 @@ struct SuperBlock {
     data_base: usize,
     numa: usize,
     boundary: usize,
-    pos: AtomicUsize,
+    reserved: AtomicUsize,
     used: AtomicUsize,
+    freed: AtomicUsize,
     free_list: lflist::WordList<BumpAllocator>,
 }
 
@@ -48,12 +50,14 @@ struct ThreadMeta {
     numa: usize,
     tid: usize,
     cpu: usize,
-    // reserve: RefCell<ThreadLocalReserve>
+    reserve: RefCell<ThreadLocalReserve>
 }
 
+#[derive(Clone)]
 struct ThreadLocalReserve {
     head: usize,
-    pos: usize
+    pos: usize,
+    source: *const SuperBlock
 }
 
 struct NodeMeta {
@@ -68,6 +72,8 @@ struct SizeClass {
     cpu: usize,
     // SuperBlock ptr address list
     blocks: lflist::WordList<BumpAllocator>,
+    // thread local reservations from data threads
+    reserve_free: lflist::ObjectList<ThreadLocalReserve, BumpAllocator>
 }
 
 struct CoreMeta {
@@ -141,6 +147,7 @@ impl ThreadMeta {
         let numa_id = numa_from_cpu_id(cpu_id);
         let tid = current_thread_id();
         Self {
+            reserve: RefCell::new(ThreadLocalReserve::default()),
             numa: numa_id,
             cpu: cpu_id,
             tid,
@@ -157,6 +164,7 @@ impl SizeClass {
             numa,
             cpu,
             blocks: WordList::new(),
+            reserve_free: ObjectList::new()
         }
     }
 
@@ -217,8 +225,9 @@ impl SuperBlock {
                 data_base,
                 boundary,
                 cpu,
-                pos: AtomicUsize::new(data_base),
-                used: AtomicUsize::new(0),
+                reserved: AtomicUsize::new(data_base),
+                used: AtomicUsize::new(0), // not used for now
+                freed: AtomicUsize::new(0),
                 free_list: lflist::WordList::new(),
             };
         }
@@ -228,12 +237,12 @@ impl SuperBlock {
 
     fn allocate(&self) -> Option<usize> {
         let res = self.free_list.pop().or_else(|| loop {
-            let addr = self.pos.load(Relaxed);
+            let addr = self.reserved.load(Relaxed);
             if addr >= self.boundary {
                 return None;
             } else {
                 let new_addr = addr + self.size;
-                if self.pos.compare_and_swap(addr, new_addr, Relaxed) == addr {
+                if self.reserved.compare_and_swap(addr, new_addr, Relaxed) == addr {
                     // insert to per CPU cache to avoid synchronization
                     OBJECT_MAP.insert_to_cpu(addr, self as *const Self as usize, self.cpu);
                     return Some(addr);
@@ -252,6 +261,26 @@ impl SuperBlock {
         debug_assert_eq!((addr - self.data_base) % self.size, 0);
         self.free_list.push(addr);
         self.used.fetch_sub(self.size, Relaxed);
+    }
+}
+
+impl ThreadLocalReserve {
+    pub fn with_head(head: usize, superblock: *mut SuperBlock) -> Self {
+        Self {
+            head,
+            pos: head,
+            source: superblock
+        }
+    }
+}
+
+impl Default for ThreadLocalReserve {
+    fn default() -> Self {
+        Self {
+            head: 0,
+            pos: 0,
+            source: null()
+        }
     }
 }
 
