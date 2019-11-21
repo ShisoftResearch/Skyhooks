@@ -39,7 +39,7 @@ struct SuperBlock {
     data_base: usize,
     numa: usize,
     boundary: usize,
-    pos: AtomicUsize,
+    reservation: AtomicUsize,
     used: AtomicUsize,
     free_list: lflist::WordList<BumpAllocator>,
 }
@@ -48,12 +48,6 @@ struct ThreadMeta {
     numa: usize,
     tid: usize,
     cpu: usize,
-    // reserve: RefCell<ThreadLocalReserve>
-}
-
-struct ThreadLocalReserve {
-    head: usize,
-    pos: usize
 }
 
 struct NodeMeta {
@@ -217,7 +211,7 @@ impl SuperBlock {
                 data_base,
                 boundary,
                 cpu,
-                pos: AtomicUsize::new(data_base),
+                reservation: AtomicUsize::new(data_base),
                 used: AtomicUsize::new(0),
                 free_list: lflist::WordList::new(),
             };
@@ -228,12 +222,12 @@ impl SuperBlock {
 
     fn allocate(&self) -> Option<usize> {
         let res = self.free_list.pop().or_else(|| loop {
-            let addr = self.pos.load(Relaxed);
+            let addr = self.reservation.load(Relaxed);
             if addr >= self.boundary {
                 return None;
             } else {
                 let new_addr = addr + self.size;
-                if self.pos.compare_and_swap(addr, new_addr, Relaxed) == addr {
+                if self.reservation.compare_and_swap(addr, new_addr, Relaxed) == addr {
                     // insert to per CPU cache to avoid synchronization
                     OBJECT_MAP.insert_to_cpu(addr, self as *const Self as usize, self.cpu);
                     return Some(addr);
