@@ -8,7 +8,10 @@ use std::mem;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::Arc;
+use std::cmp::min;
 
+const MAX_BINS: usize = 16;
+const BIN_INDEX_MASK: usize = MAX_BINS - 1;
 type EvBins = Arc<Vec<EvBin>>;
 
 #[derive(Clone)]
@@ -27,7 +30,7 @@ struct EvBin {
 
 impl EvMap {
     pub fn new() -> Self {
-        let mut source = Vec::with_capacity(*NUM_CPU);
+        let mut source = Vec::with_capacity(min(*NUM_CPU, MAX_BINS));
         for _ in 0..*NUM_CPU {
             source.push(EvBin::new());
         }
@@ -53,7 +56,7 @@ impl EvMap {
     }
 
     pub fn insert_to_cpu(&self, key: usize, value: usize, cpu_id: usize) {
-        self.source[cpu_id].push(key, value);
+        self.source[cpu_id & BIN_INDEX_MASK].push(key, value);
     }
 
     #[inline]
@@ -86,7 +89,7 @@ impl Producer {
     }
     #[inline]
     pub fn insert_to_cpu(&self, key: usize, value: usize, cpu_id: usize) {
-        self.cache[cpu_id].push(key, value);
+        self.cache[cpu_id & BIN_INDEX_MASK].push(key, value);
     }
 }
 
