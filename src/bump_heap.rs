@@ -42,7 +42,7 @@ struct SizeClass {
     free_list: lflist::WordList<MmapAllocator>,
 }
 
-pub const HEAP_VIRT_SIZE: usize = 512 * 1024 * 1024; // 256MB
+pub const HEAP_VIRT_SIZE: usize = 128 * 1024 * 1024; // 256MB
 
 fn allocate_address_space() -> Ptr {
     mmap_without_fd(HEAP_VIRT_SIZE)
@@ -66,7 +66,7 @@ impl AllocatorInner {
     }
 
     fn bump_allocate(&self, size: usize) -> usize {
-        let back_off= Backoff::new();
+        let backoff = Backoff::new();
         loop {
             let base = self.base.load(Relaxed);
             let current_tail = self.tail.load(Relaxed);
@@ -91,7 +91,6 @@ impl AllocatorInner {
                 return current_tail;
             }
             // CAS tail failed, retry
-            back_off.spin();
         }
     }
 

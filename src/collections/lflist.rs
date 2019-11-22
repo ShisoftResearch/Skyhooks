@@ -188,7 +188,6 @@ impl<T: Default + Copy, A: Alloc + Default> List<T, A> {
                 self.count.fetch_add(1, Relaxed);
                 return;
             }
-            backoff.spin();
         }
     }
 
@@ -735,6 +734,7 @@ impl<T: Default + Copy> ExchangeSlot<T> {
                             unreachable!()
                         }
                     }
+                    backoff.spin();
                 }
             } else {
                 return Err(data);
@@ -769,8 +769,10 @@ impl<T: Default + Copy> ExchangeSlot<T> {
     }
 
     fn store_state_data(&self, data: Option<ExchangeData<T>>) {
-        let mut data_content_mut = unsafe { &mut *self.data.get() };
-        *data_content_mut = data;
+        let mut data_content_ptr = self.data.get();
+        unsafe {
+            ptr::write(data_content_ptr, data)
+        }
         self.data_state.store(self.state.load(Relaxed), SeqCst);
     }
 
