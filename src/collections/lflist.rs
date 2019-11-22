@@ -504,7 +504,7 @@ impl<T: Default, A: Alloc + Default> BufferMeta<T, A> {
         }
         loop {
             //wait until reference counter reach 2 one for not garbage one for current reference)
-            let rc = buffer.refs.load(SeqCst);
+            let rc = buffer.refs.load(Relaxed);
             debug_assert!(rc > flag, "get reference {:x}, value {}", rc, rc & !flag);
             let rc = rc & !flag;
             if rc <= 1 {
@@ -773,12 +773,12 @@ impl<T: Default + Copy> ExchangeSlot<T> {
         unsafe {
             ptr::write(data_content_ptr, data)
         }
-        self.data_state.store(self.state.load(Relaxed), SeqCst);
+        fence(SeqCst);
+        self.data_state.store(self.state.load(Relaxed), Relaxed);
     }
 
     fn wait_state_data_until(&self, expecting: usize, backoff: &Backoff) {
         while self.data_state.load(Relaxed) != expecting {
-            fence(SeqCst);
             backoff.spin();
         }
     }
@@ -790,7 +790,8 @@ impl<T: Default + Copy> ExchangeSlot<T> {
     fn swap_state_data(&self, data: &mut Option<ExchangeData<T>>) {
         let mut data_content_mut = unsafe { &mut *self.data.get() };
         mem::swap(data, data_content_mut);
-        self.data_state.store(self.state.load(Relaxed), SeqCst);
+        fence(SeqCst);
+        self.data_state.store(self.state.load(Relaxed), Relaxed);
     }
 }
 
