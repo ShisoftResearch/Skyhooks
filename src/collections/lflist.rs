@@ -88,6 +88,7 @@ impl<T: Default + Copy, A: Alloc + Default> List<T, A> {
     fn do_push(&self, mut flag: usize, mut data: T) {
         debug_assert_ne!(flag, EMPTY_SLOT);
         debug_assert_ne!(flag, SENTINEL_SLOT);
+        let backoff = Backoff::new();
         loop {
             let obj_size = mem::size_of::<T>();
             let head_ptr = self.head.load(Relaxed);
@@ -141,6 +142,8 @@ impl<T: Default + Copy, A: Alloc + Default> List<T, A> {
                         return;
                     }
                 }
+            } else {
+                backoff.spin();
             }
         }
     }
@@ -278,6 +281,8 @@ impl<T: Default + Copy, A: Alloc + Default> List<T, A> {
                         // meet another pop
                     }
                 }
+            } else {
+                backoff.spin();
             }
         }
     }
