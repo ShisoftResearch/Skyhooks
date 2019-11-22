@@ -188,21 +188,14 @@ impl SuperBlock {
     pub fn new(tier: usize, cpu: usize, numa: usize, size: usize) -> *mut Self {
         // created a cache aligned super block
         // super block will not deallocated
-
-        // For NUMA address hints to lower contention across nodes in object map,
-        // this function will generate n heaps, which n is the number of NUMA nodes
-        // It will return the heap for the CPU and put rest of them into common heap of each nodes
-
         let node_allocator = &PER_NODE_META[numa].bump_allocator;
         let self_size = mem::size_of::<Self>();
         let padding = align_padding(self_size, CACHE_LINE_SIZE);
         // Cache align on data
         let self_size_with_padding = self_size + padding;
         let chunk_size = self_size_with_padding + *SUPERBLOCK_SIZE;
-        let chunk_padding = align_padding(chunk_size, CACHE_LINE_SIZE);
-        let chunk_size_padded = chunk_size + chunk_padding;
         // use bump_allocate function for it just allocate, do't record object address
-        let addr = node_allocator.bump_allocate(chunk_size_padded);
+        let addr = node_allocator.bump_allocate(chunk_size);
         let data_base = addr + self_size_with_padding;
         let boundary = data_base + *SUPERBLOCK_SIZE;
         let ptr = addr as *mut Self;
