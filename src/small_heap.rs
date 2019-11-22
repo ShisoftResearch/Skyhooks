@@ -208,6 +208,7 @@ impl SuperBlock {
         let ptr = addr as *mut Self;
 
         // ensure cache aligned
+        debug_assert_eq!(align_padding(addr, CACHE_LINE_SIZE), 0);
         debug_assert_eq!(align_padding(data_base, CACHE_LINE_SIZE), 0);
 
         unsafe {
