@@ -4,8 +4,8 @@ use crate::collections::fixvec::FixedVec;
 use crate::collections::lflist::WordList;
 use crate::collections::{evmap, lflist};
 use crate::generic_heap::{log_2_of, size_class_index_from_size, ObjectMeta, NUM_SIZE_CLASS};
-use crate::mmap::mmap_without_fd;
 use crate::utils::*;
+use core::ptr;
 use core::mem;
 use core::mem::MaybeUninit;
 use core::sync::atomic::AtomicUsize;
@@ -196,7 +196,9 @@ impl SuperBlock {
         // Cache align on data
         let self_size_with_padding = self_size + padding;
         let chunk_size = self_size_with_padding + *SUPERBLOCK_SIZE;
-        let addr = mmap_without_fd(chunk_size) as usize;
+        let addr = unsafe { bump_heap::malloc(chunk_size + CACHE_LINE_SIZE) } as usize;
+        let addr_padding = align_padding(addr, CACHE_LINE_SIZE);
+        let addr = addr + addr_padding;
         let data_base = addr + self_size_with_padding;
         let boundary = data_base + *SUPERBLOCK_SIZE;
         let ptr = addr as *mut Self;
@@ -205,7 +207,7 @@ impl SuperBlock {
         debug_assert_eq!(align_padding(data_base, CACHE_LINE_SIZE), 0);
 
         unsafe {
-            (*ptr) = Self {
+            ptr::write(ptr, Self {
                 numa,
                 size,
                 data_base,
@@ -214,7 +216,7 @@ impl SuperBlock {
                 reservation: AtomicUsize::new(data_base),
                 used: AtomicUsize::new(0),
                 free_list: lflist::WordList::new(),
-            };
+            });
         }
 
         return ptr;
