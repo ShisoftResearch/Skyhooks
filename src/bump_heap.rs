@@ -17,6 +17,7 @@ use core::{mem, ptr};
 use lfmap::Map;
 use libc::*;
 use std::mem::MaybeUninit;
+use crossbeam::utils::Backoff;
 
 const BUMP_SIZE_CLASS: usize = NUM_SIZE_CLASS << 1;
 
@@ -41,7 +42,7 @@ struct SizeClass {
     free_list: lflist::WordList<MmapAllocator>,
 }
 
-pub const HEAP_VIRT_SIZE: usize = 128 * 1024 * 1024; // 128MB
+pub const HEAP_VIRT_SIZE: usize = 512 * 1024 * 1024; // 256MB
 
 fn allocate_address_space() -> Ptr {
     mmap_without_fd(HEAP_VIRT_SIZE)
@@ -65,18 +66,20 @@ impl AllocatorInner {
     }
 
     fn bump_allocate(&self, size: usize) -> usize {
+        let back_off= Backoff::new();
         loop {
             let base = self.base.load(Relaxed);
             let current_tail = self.tail.load(Relaxed);
             let new_tail = current_tail + size;
-            if new_tail > base + HEAP_VIRT_SIZE {
+            let upper_bound = base + HEAP_VIRT_SIZE;
+            if current_tail < base || current_tail > upper_bound {
+                // current out of range, wrong memory target
+            } else if new_tail > upper_bound {
                 // may overflow the address space, need to allocate another address space
                 // Fetch the old base address for reference in CAS
                 self.swap_memory(base);
                 // Anyhow, skip follow statements and retry
-                continue;
-            }
-            if self
+            } else if self
                 .tail
                 .compare_and_swap(current_tail, new_tail, Ordering::SeqCst)
                 == current_tail
@@ -88,6 +91,7 @@ impl AllocatorInner {
                 return current_tail;
             }
             // CAS tail failed, retry
+            back_off.spin();
         }
     }
 
