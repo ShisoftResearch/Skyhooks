@@ -409,15 +409,17 @@ impl<T: Default, A: Alloc + Default> BufferMeta<T, A> {
         let head_page = alloc_mem::<A>(total_size) as *mut Self;
         let head_page_addr = head_page as usize;
         let slots_start = head_page_addr + meta_size;
-        *(unsafe { &mut *head_page }) = Self {
-            head: AtomicUsize::new(0),
-            next: AtomicPtr::new(null_mut()),
-            refs: AtomicUsize::new(1),
-            upper_bound: head_page_addr + total_size,
-            lower_bound: slots_start,
-            tuple_size,
-            total_size,
-        };
+        unsafe {
+            ptr::write(head_page, Self {
+                head: AtomicUsize::new(0),
+                next: AtomicPtr::new(null_mut()),
+                refs: AtomicUsize::new(1),
+                upper_bound: head_page_addr + total_size,
+                lower_bound: slots_start,
+                tuple_size,
+                total_size,
+            });
+        }
         head_page
     }
 
