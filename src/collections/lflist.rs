@@ -30,8 +30,7 @@ const SENTINEL_SLOT: usize = 1;
 const EXCHANGE_EMPTY: usize = 0;
 const EXCHANGE_WAITING: usize = 1;
 const EXCHANGE_BUSY: usize = 2;
-const EXCHANGE_SPIN_WAIT_NS: usize = 150;
-const CONGESTION_REF: usize = 3;
+const EXCHANGE_SPIN_WAIT_NS: usize = 200;
 
 type ExchangeData<T> = Option<(usize, T)>;
 
@@ -89,13 +88,13 @@ impl<T: Default + Copy, A: Alloc + Default> List<T, A> {
     fn do_push(&self, mut flag: usize, mut data: T) {
         debug_assert_ne!(flag, EMPTY_SLOT);
         debug_assert_ne!(flag, SENTINEL_SLOT);
+        let backoff = Backoff::new();
         loop {
             let obj_size = mem::size_of::<T>();
             let head_ptr = self.head.load(Relaxed);
             let page = BufferMeta::borrow(head_ptr);
             let slot_pos = page.head.load(Relaxed);
             let next_pos = slot_pos + 1;
-            let reference = page.refs.load(Relaxed);
             if next_pos > self.buffer_cap {
                 // buffer overflow, make new and link to last buffer
                 let new_head = BufferMeta::new(self.buffer_cap);
@@ -131,26 +130,20 @@ impl<T: Default + Copy, A: Alloc + Default> List<T, A> {
                     return;
                 }
             }
-            if reference > CONGESTION_REF {
+            if self.exchange.worth_exchange(page.refs.load(Relaxed)) {
                 match self.exchange.exchange(Some((flag, data))) {
-                    Ok(Some(tuple)) => {
+                    Ok(Some(tuple)) | Err(Some(tuple)) => {
                         // exchanged a push, reset this push parameters
                         flag = tuple.0;
                         data = tuple.1;
                     }
-                    Ok(None) => {
+                    Ok(None) | Err(None) => {
                         // pushed to other popping thread
                         return;
                     }
-                    Err(Some(tuple)) => {
-                        // failed exchange, parameters have been returned
-                        flag = tuple.0;
-                        data = tuple.1;
-                    }
-                    Err(None) => {
-                        // unreachable!();
-                    }
                 }
+            } else {
+                backoff.spin();
             }
         }
     }
@@ -164,7 +157,6 @@ impl<T: Default + Copy, A: Alloc + Default> List<T, A> {
             let page = BufferMeta::borrow(head_ptr);
             let slot_pos = page.head.load(Relaxed);
             let next_pos = slot_pos + 1;
-            let reference = page.refs.load(Relaxed);
             if next_pos > self.buffer_cap {
                 // buffer overflow, make new and link to last buffer
                 let new_head = BufferMeta::new(self.buffer_cap);
@@ -203,7 +195,6 @@ impl<T: Default + Copy, A: Alloc + Default> List<T, A> {
             let slot = page.head.load(Relaxed);
             let obj_size = mem::size_of::<T>();
             let next_buffer_ptr = page.next.load(Relaxed);
-            let reference = page.refs.load(Relaxed);
             if slot == 0 && next_buffer_ptr == null_mut() {
                 // empty buffer chain
                 return None;
@@ -233,6 +224,8 @@ impl<T: Default + Copy, A: Alloc + Default> List<T, A> {
                     );
                     debug_assert_eq!(dropped_next.unwrap_or(null_mut()), next_buffer_ptr);
                     // don't need to unref here for drop out did this for us
+                }  else {
+                    backoff.spin();
                 }
                 continue;
             }
@@ -277,24 +270,19 @@ impl<T: Default + Copy, A: Alloc + Default> List<T, A> {
             } else {
                 return res;
             }
-            if reference > CONGESTION_REF {
+            if self.exchange.worth_exchange(page.refs.load(Relaxed)) {
                 match self.exchange.exchange(None) {
-                    Ok(Some(tuple)) => {
+                    Ok(Some(tuple)) | Err(Some(tuple)) => {
                         // exchanged a push, return it
                         self.count.fetch_sub(1, Relaxed);
                         return Some(tuple);
                     }
-                    Ok(None) => {
+                    Ok(None) | Err(None) => {
                         // meet another pop
                     }
-                    Err(Some(tuple)) => {
-                        self.count.fetch_sub(1, Relaxed);
-                        return Some(tuple);
-                    }
-                    Err(None) => {
-                        // cannot find a pair to exchange
-                    }
                 }
+            } else {
+                backoff.spin();
             }
         }
     }
@@ -800,7 +788,9 @@ unsafe impl<T: Default + Copy> Send for ExchangeSlot<T> {}
 
 impl<T: Default + Copy, A: Alloc + Default> ExchangeArray<T, A> {
     pub fn new() -> Self {
-        Self::with_capacity(8)
+        let num_cpus = *NUM_CPU;
+        let default_capacity = num_cpus >> 3;
+        Self::with_capacity(max(default_capacity, 2))
     }
 
     pub fn with_capacity(cap: usize) -> Self {
@@ -820,6 +810,10 @@ impl<T: Default + Copy, A: Alloc + Default> ExchangeArray<T, A> {
         let slot_num = self.rand.rand_range(0, self.capacity - 1);
         let slot = &self.slots[slot_num];
         slot.exchange(data)
+    }
+
+    pub fn worth_exchange(&self, rc: usize) -> bool {
+        rc >= self.slots.capacity()
     }
 }
 

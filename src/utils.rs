@@ -16,7 +16,7 @@ lazy_static! {
     pub static ref SYS_PAGE_SIZE: usize = unsafe { sysconf(_SC_PAGESIZE) as usize };
     pub static ref SYS_CPU_NODE: HashMap<usize, usize> = cpu_topology();
     pub static ref NUM_NUMA_NODES: usize = num_numa_nodes();
-    pub static ref NUM_CPU: usize = SYS_CPU_NODE.len();
+    pub static ref NUM_CPU: usize = unsafe { libc::sysconf(libc::_SC_NPROCESSORS_ONLN) as usize };
     pub static ref SYS_TOTAL_MEM: usize = total_memory();
 }
 

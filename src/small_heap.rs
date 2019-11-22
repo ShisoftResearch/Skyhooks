@@ -134,6 +134,7 @@ impl ThreadMeta {
         let cpu_id = current_cpu();
         let numa_id = numa_from_cpu_id(cpu_id);
         let tid = current_thread_id();
+        set_node_affinity(numa_id, tid as u64);
         Self {
             numa: numa_id,
             cpu: cpu_id,
