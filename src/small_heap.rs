@@ -52,6 +52,7 @@ struct ThreadMeta {
 
 struct NodeMeta {
     size_class_list: TSizeClasses,
+    bump_allocator: bump_heap::AllocatorInstance<BumpAllocator>,
     pending_free: lflist::WordList<BumpAllocator>,
 }
 
@@ -192,14 +193,16 @@ impl SuperBlock {
         // this function will generate n heaps, which n is the number of NUMA nodes
         // It will return the heap for the CPU and put rest of them into common heap of each nodes
 
+        let node_allocator = &PER_NODE_META[numa].bump_allocator;
         let self_size = mem::size_of::<Self>();
         let padding = align_padding(self_size, CACHE_LINE_SIZE);
         // Cache align on data
         let self_size_with_padding = self_size + padding;
         let chunk_size = self_size_with_padding + *SUPERBLOCK_SIZE;
-        let addr = unsafe { bump_heap::malloc(chunk_size + CACHE_LINE_SIZE) } as usize;
-        let addr_padding = align_padding(addr, CACHE_LINE_SIZE);
-        let addr = addr + addr_padding;
+        let chunk_padding = align_padding(chunk_size, CACHE_LINE_SIZE);
+        let chunk_size_padded = chunk_size + chunk_padding;
+        // use bump_allocate function for it just allocate, do't record object address
+        let addr = node_allocator.bump_allocate(chunk_size_padded);
         let data_base = addr + self_size_with_padding;
         let boundary = data_base + *SUPERBLOCK_SIZE;
         let ptr = addr as *mut Self;
@@ -258,6 +261,7 @@ fn gen_numa_node_list() -> Vec<NodeMeta> {
     for i in 0..num_nodes {
         nodes.push(NodeMeta {
             size_class_list: size_classes(0, i),
+            bump_allocator: bump_heap::AllocatorInstance::new(),
             pending_free: lflist::WordList::new(),
         });
     }

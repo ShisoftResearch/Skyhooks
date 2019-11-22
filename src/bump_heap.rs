@@ -42,7 +42,7 @@ struct SizeClass<A: Alloc + Default> {
     free_list: lflist::WordList<A>,
 }
 
-pub const HEAP_VIRT_SIZE: usize = 64 * 1024 * 1024; // 64MB
+pub const HEAP_VIRT_SIZE: usize = 128 * 1024 * 1024; // 128MB
 
 fn allocate_address_space() -> Ptr {
     mmap_without_fd(HEAP_VIRT_SIZE)
