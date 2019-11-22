@@ -23,6 +23,7 @@ impl<T, A: Alloc + Default> FixedVec<T, A> {
             shadow: PhantomData,
         }
     }
+    pub fn capacity(&self) -> usize { self.capacity }
     fn object_ptr(&self, index: usize) -> usize {
         self.ptr as usize + index * mem::size_of::<T>()
     }

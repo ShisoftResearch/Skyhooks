@@ -30,8 +30,7 @@ const SENTINEL_SLOT: usize = 1;
 const EXCHANGE_EMPTY: usize = 0;
 const EXCHANGE_WAITING: usize = 1;
 const EXCHANGE_BUSY: usize = 2;
-const EXCHANGE_SPIN_WAIT_NS: usize = 300;
-const CONGESTION_REF: usize = 3;
+const EXCHANGE_SPIN_WAIT_NS: usize = 200;
 
 type ExchangeData<T> = Option<(usize, T)>;
 
@@ -130,7 +129,7 @@ impl<T: Default + Copy, A: Alloc + Default> List<T, A> {
                     return;
                 }
             }
-            if page.refs.load(Relaxed) > CONGESTION_REF {
+            if self.exchange.worth_exchange(page.refs.load(Relaxed)) {
                 match self.exchange.exchange(Some((flag, data))) {
                     Ok(Some(tuple)) | Err(Some(tuple)) => {
                         // exchanged a push, reset this push parameters
@@ -268,7 +267,7 @@ impl<T: Default + Copy, A: Alloc + Default> List<T, A> {
             } else {
                 return res;
             }
-            if page.refs.load(Relaxed) > CONGESTION_REF {
+            if self.exchange.worth_exchange(page.refs.load(Relaxed)) {
                 match self.exchange.exchange(None) {
                     Ok(Some(tuple)) | Err(Some(tuple)) => {
                         // exchanged a push, return it
@@ -806,6 +805,10 @@ impl<T: Default + Copy, A: Alloc + Default> ExchangeArray<T, A> {
         let slot_num = self.rand.rand_range(0, self.capacity - 1);
         let slot = &self.slots[slot_num];
         slot.exchange(data)
+    }
+
+    pub fn worth_exchange(&self, rc: usize) -> bool {
+        rc >= self.slots.capacity()
     }
 }
 
