@@ -21,6 +21,7 @@ sys-info = "*"
 errno = "*"
 rand = "*"
 rand_xoshiro = "*"
+lazy-init = "*"
 
 [dependencies.regex]
 version = "1.3.1"

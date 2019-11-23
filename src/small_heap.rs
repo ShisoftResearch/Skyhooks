@@ -18,6 +18,8 @@ use std::os::unix::thread::JoinHandleExt;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;
 use std::thread;
+use lazy_init::Lazy;
+use std::ops::Deref;
 
 type TSizeClasses = [SizeClass; NUM_SIZE_CLASS];
 
@@ -26,8 +28,8 @@ thread_local! {
 }
 
 lazy_static! {
-    static ref PER_NODE_META: Vec<NodeMeta> = gen_numa_node_list();
-    static ref PER_CPU_META: Vec<CoreMeta> = gen_core_meta();
+    static ref PER_NODE_META: Vec<LazyWrapper<NodeMeta>> = gen_numa_node_list();
+    static ref PER_CPU_META: Vec<LazyWrapper<CoreMeta>> = gen_core_meta();
     static ref SUPERBLOCK_SIZE: usize = *MAXIMUM_SIZE << 2;
     static ref OBJECT_MAP: evmap::EvMap = evmap::EvMap::new();
     pub static ref MAXIMUM_SIZE: usize = maximum_size();
@@ -67,6 +69,11 @@ struct SizeClass {
 
 struct CoreMeta {
     size_class_list: TSizeClasses,
+}
+
+struct LazyWrapper<T: Sync> {
+    inner: Lazy<T>,
+    init: Box<dyn Fn() -> T>
 }
 
 pub fn allocate(size: usize) -> Ptr {
@@ -249,15 +256,38 @@ impl SuperBlock {
     }
 }
 
-fn gen_numa_node_list() -> Vec<NodeMeta> {
+impl <T: Sync> LazyWrapper<T> {
+    pub fn new(create: Box<dyn Fn() -> T>) -> Self {
+        Self {
+            inner: Lazy::new(),
+            init: create
+        }
+    }
+}
+
+impl <T: Sync> Deref for LazyWrapper<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        self.inner.get_or_create(|| {
+            (self.init)()
+        })
+    }
+}
+
+unsafe impl <T: Sync> Sync for LazyWrapper<T> {}
+
+fn gen_numa_node_list() -> Vec<LazyWrapper<NodeMeta>> {
     let num_nodes = *NUM_NUMA_NODES;
     let mut nodes = Vec::with_capacity(num_nodes);
     for i in 0..num_nodes {
-        nodes.push(NodeMeta {
-            size_class_list: size_classes(0, i),
-            bump_allocator: bump_heap::AllocatorInstance::new(),
-            pending_free: lflist::WordList::new(),
-        });
+        nodes.push(LazyWrapper::new(Box::new(move || {
+            NodeMeta {
+                size_class_list: size_classes(0, i),
+                bump_allocator: bump_heap::AllocatorInstance::new(),
+                pending_free: lflist::WordList::new(),
+            }
+        })));
     }
     return nodes;
 }
@@ -294,11 +324,13 @@ fn maximum_size() -> usize {
     2 << (NUM_SIZE_CLASS - 1)
 }
 
-fn gen_core_meta() -> Vec<CoreMeta> {
+fn gen_core_meta() -> Vec<LazyWrapper<CoreMeta>> {
     (0..*NUM_CPU)
-        .map(|cpu_id| CoreMeta {
-            size_class_list: size_classes(cpu_id, SYS_CPU_NODE[&cpu_id]),
-        })
+        .map(|cpu_id| LazyWrapper::new(Box::new(move || {
+            CoreMeta {
+                size_class_list: size_classes(cpu_id, SYS_CPU_NODE[&cpu_id]),
+            }
+        })))
         .collect()
 }
 
