@@ -29,10 +29,11 @@ mod test {
     use crate::bump_heap::BumpAllocator;
     use crate::mmap_heap::MmapAllocator;
     use lfmap::Map;
+    use crate::utils::AddressHasher;
 
     #[test]
     pub fn general() {
-        let map = lfmap::WordMap::<MmapAllocator>::with_capacity(1024);
+        let map = lfmap::WordMap::<MmapAllocator, AddressHasher>::with_capacity(1024);
         for i in 5..10240 {
             map.insert(i, i * 2);
         }

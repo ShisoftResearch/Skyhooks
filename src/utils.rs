@@ -8,9 +8,15 @@ use libc::{sysconf, _SC_PAGESIZE};
 use regex::Regex;
 use std::collections::HashMap;
 use std::fs::read_dir;
+use std::hash::Hasher;
 
 pub const CACHE_LINE_SIZE: usize = 64;
 pub type CacheLineType = (usize, usize, usize, usize, usize, usize, usize, usize);
+
+
+const HASH_MAGIC_NUMBER_1: usize = 67280421310721;
+const HASH_MAGIC_NUMBER_2: usize = 123456789;
+const HASH_MAGIC_NUMBER_3: usize = 362436069;
 
 lazy_static! {
     pub static ref SYS_PAGE_SIZE: usize = unsafe { sysconf(_SC_PAGESIZE) as usize };
@@ -18,6 +24,30 @@ lazy_static! {
     pub static ref NUM_NUMA_NODES: usize = num_numa_nodes();
     pub static ref NUM_CPU: usize = unsafe { libc::sysconf(libc::_SC_NPROCESSORS_ONLN) as usize };
     pub static ref SYS_TOTAL_MEM: usize = total_memory();
+}
+
+pub struct AddressHasher {
+    num: u64
+}
+
+impl Hasher for AddressHasher {
+    fn finish(&self) -> u64 {
+        self.num
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        unimplemented!()
+    }
+
+    fn write_usize(&mut self, i: usize) {
+        self.num = (i >> i.trailing_zeros()) as u64
+    }
+}
+
+impl Default for AddressHasher {
+    fn default() -> Self {
+        Self { num: 0 }
+    }
 }
 
 pub fn align_padding(len: usize, align: usize) -> usize {
@@ -169,16 +199,17 @@ pub fn debug_validate(ptr: Ptr, size: Size) -> Ptr {
 mod test {
     use crate::api::NullocAllocator;
     use crate::collections::lflist::WordList;
-    use lfmap::{Map, WordMap};
+    use lfmap::{Map, WordMap, PassthroughHasher};
     use rand::{thread_rng, Rng, SeedableRng};
     use rand_xorshift::XorShiftRng;
     use rand_xoshiro::Xoroshiro64StarStar;
-    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::alloc::{GlobalAlloc, Layout, System, Global};
     use std::collections::HashMap;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering::Relaxed;
     use test::Bencher;
     use std::time::Instant;
+    use crate::utils::AddressHasher;
 
     #[test]
     fn numa_nodes() {
@@ -260,7 +291,7 @@ mod test {
 
     #[bench]
     fn lfmap(b: &mut Bencher) {
-        let map = WordMap::<System>::with_capacity(128);
+        let map = WordMap::<Global, PassthroughHasher>::with_capacity(128);
         let mut i = 5;
         b.iter(|| {
             map.insert(i, i);
