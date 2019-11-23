@@ -1,5 +1,5 @@
 use crate::mmap_heap::*;
-use crate::utils::align_padding;
+use crate::utils::*;
 use crate::{bump_heap, generic_heap, Ptr, Size, NULL_PTR};
 use core::alloc::{GlobalAlloc, Layout};
 use core::cell::Cell;
@@ -12,8 +12,8 @@ thread_local! {
     pub static INNER_CALL: Cell<bool> = Cell::new(false);
 }
 lazy_static! {
-    static ref RUST_ADDR_MAPPING: lfmap::WordMap<MmapAllocator> =
-        lfmap::WordMap::<MmapAllocator>::with_capacity(2048);
+    static ref RUST_ADDR_MAPPING: lfmap::WordMap<MmapAllocator, AddressHasher> =
+        lfmap::WordMap::with_capacity(256);
 }
 
 pub unsafe fn nu_malloc(size: Size) -> Ptr {

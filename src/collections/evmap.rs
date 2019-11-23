@@ -1,14 +1,16 @@
 // eventual-consistent map based on lfmap and lflist from Shisoft
 use crate::collections::lflist;
-use crate::utils::{current_cpu, NUM_CPU};
+use crate::utils::{current_cpu, NUM_CPU, AddressHasher};
 use core::cell::Cell;
-use lfmap::{Map, ObjectMap, WordMap};
+use lfmap::{Map, WordMap};
 use std::marker::PhantomData;
 use std::mem;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::Arc;
 use std::cmp::min;
+use std::alloc::Global;
+use crate::bump_heap::BumpAllocator;
 
 const MAX_BINS: usize = 16;
 const BIN_INDEX_MASK: usize = MAX_BINS - 1;
@@ -20,7 +22,7 @@ pub struct Producer {
 }
 
 pub struct EvMap {
-    map: lfmap::WordMap,
+    map: lfmap::WordMap<BumpAllocator, AddressHasher>,
     source: EvBins,
 }
 
@@ -36,7 +38,7 @@ impl EvMap {
             source.push(EvBin::new());
         }
         Self {
-            map: WordMap::with_capacity(4096),
+            map: WordMap::with_capacity(256),
             source: Arc::new(source),
         }
     }

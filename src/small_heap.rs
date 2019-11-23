@@ -10,7 +10,7 @@ use core::mem;
 use core::mem::MaybeUninit;
 use core::sync::atomic::AtomicUsize;
 use crossbeam_queue::SegQueue;
-use lfmap::{Map, ObjectMap, WordMap};
+use lfmap::{Map, WordMap};
 use std::alloc::GlobalAlloc;
 use std::cell::{Cell, RefCell};
 use std::clone::Clone;
@@ -139,9 +139,9 @@ pub fn size_of(ptr: Ptr) -> Option<usize> {
 
 impl ThreadMeta {
     pub fn new() -> Self {
-        let cpu_id = current_cpu();
-        let numa_id = numa_from_cpu_id(cpu_id);
         let tid = current_thread_id();
+        let cpu_id = cpu_id_from_tid(tid);
+        let numa_id = numa_from_cpu_id(cpu_id);
         set_node_affinity(numa_id, tid as u64);
         Self {
             numa: numa_id,
@@ -346,6 +346,7 @@ mod test {
     use crate::api::NullocAllocator;
     use crate::small_heap::{allocate, free};
     use lfmap::Map;
+    use crate::utils::AddressHasher;
 
     #[test]
     pub fn general() {
@@ -370,7 +371,7 @@ mod test {
 
     #[test]
     pub fn application() {
-        let map = lfmap::WordMap::<NullocAllocator>::with_capacity(64);
+        let map = lfmap::WordMap::<NullocAllocator, AddressHasher>::with_capacity(64);
         for i in 5..10240 {
             map.insert(i, i * 2);
         }

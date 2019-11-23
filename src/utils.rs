@@ -8,16 +8,50 @@ use libc::{sysconf, _SC_PAGESIZE};
 use regex::Regex;
 use std::collections::HashMap;
 use std::fs::read_dir;
+use std::hash::Hasher;
+use lfmap::hash;
+use std::collections::hash_map::DefaultHasher;
+use seahash::SeaHasher;
 
 pub const CACHE_LINE_SIZE: usize = 64;
 pub type CacheLineType = (usize, usize, usize, usize, usize, usize, usize, usize);
 
+
+const HASH_MAGIC_NUMBER_1: usize = 67280421310721;
+const HASH_MAGIC_NUMBER_2: usize = 123456789;
+const HASH_MAGIC_NUMBER_3: usize = 362436069;
+
 lazy_static! {
     pub static ref SYS_PAGE_SIZE: usize = unsafe { sysconf(_SC_PAGESIZE) as usize };
+    pub static ref SYS_NODE_CPUS: HashMap<usize, Vec<usize>> = node_topology();
     pub static ref SYS_CPU_NODE: HashMap<usize, usize> = cpu_topology();
     pub static ref NUM_NUMA_NODES: usize = num_numa_nodes();
     pub static ref NUM_CPU: usize = unsafe { libc::sysconf(libc::_SC_NPROCESSORS_ONLN) as usize };
     pub static ref SYS_TOTAL_MEM: usize = total_memory();
+}
+
+pub struct AddressHasher {
+    num: u64
+}
+
+impl Hasher for AddressHasher {
+    fn finish(&self) -> u64 {
+        self.num
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        unimplemented!()
+    }
+
+    fn write_usize(&mut self, i: usize) {
+        self.num = (i >> i.trailing_zeros()) as u64
+    }
+}
+
+impl Default for AddressHasher {
+    fn default() -> Self {
+        Self { num: 0 }
+    }
 }
 
 pub fn align_padding(len: usize, align: usize) -> usize {
@@ -30,6 +64,21 @@ pub fn current_thread_id() -> usize {
 }
 
 pub fn cpu_topology() -> HashMap<usize, usize> {
+    let cpus = SYS_NODE_CPUS.iter()
+        .map(|(node, cpus)| {
+            let node = *node;
+            let cpus = cpus.clone();
+            cpus.into_iter()
+                .map(|cpu| (cpu, node))
+                .collect::<Vec<_>>()
+                .into_iter()
+        })
+        .flatten()
+        .collect();
+    cpus
+}
+
+pub fn node_topology() -> HashMap<usize, Vec<usize>> {
     let node_regex = Regex::new(r"node[0-9]*$").unwrap();
     let cpu_regex = Regex::new(r"cpu[0-9]*$").unwrap();
     let number_regex = Regex::new(r"\d+").unwrap();
@@ -62,13 +111,12 @@ pub fn cpu_topology() -> HashMap<usize, usize> {
                             .unwrap();
                         id
                     })
-                    .map(|cpu_id| (cpu_id, node_num))
+                    .map(|cpu_id| cpu_id)
                     .collect::<Vec<_>>();
-                cpus
+                (node_num, cpus)
             })
-            .flatten()
             .collect(),
-        Err(_) => (0..num_cpus::get()).map(|n| (n, 0)).collect(),
+        Err(_) => vec![(0, (0..num_cpus::get()).map(|n| n).collect())].into_iter().collect(),
     }
 }
 
@@ -87,6 +135,10 @@ pub fn total_memory() -> usize {
 #[cfg(target_os = "linux")]
 pub fn current_cpu() -> usize {
     unsafe { (libc::sched_getcpu() as usize) }
+}
+
+pub fn cpu_id_from_tid(tid: usize) -> usize {
+    hash::<SeaHasher>(tid) % *NUM_CPU
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -119,10 +171,19 @@ pub fn current_numa() -> usize {
 pub fn set_node_affinity(node_id: usize, thread_id: u64) {
     unsafe {
         let mut set: libc::cpu_set_t = std::mem::zeroed();
-        SYS_CPU_NODE
+        SYS_NODE_CPUS[&node_id]
             .iter()
-            .filter_map(|(cpu, node)| if *node == node_id { Some(*cpu) } else { None })
+            .map(|cpu| *cpu)
             .for_each(|cpu| libc::CPU_SET(cpu, &mut set));
+        libc::pthread_setaffinity_np(thread_id, std::mem::size_of::<libc::cpu_set_t>(), &set);
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub fn set_cpu_affinity(thread_id: u64, cpu: usize) {
+    unsafe {
+        let mut set: libc::cpu_set_t = std::mem::zeroed();
+        libc::CPU_SET(cpu, &mut set);
         libc::pthread_setaffinity_np(thread_id, std::mem::size_of::<libc::cpu_set_t>(), &set);
     }
 }
@@ -169,16 +230,17 @@ pub fn debug_validate(ptr: Ptr, size: Size) -> Ptr {
 mod test {
     use crate::api::NullocAllocator;
     use crate::collections::lflist::WordList;
-    use lfmap::{Map, WordMap};
+    use lfmap::{Map, WordMap, PassthroughHasher};
     use rand::{thread_rng, Rng, SeedableRng};
     use rand_xorshift::XorShiftRng;
     use rand_xoshiro::Xoroshiro64StarStar;
-    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::alloc::{GlobalAlloc, Layout, System, Global};
     use std::collections::HashMap;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering::Relaxed;
     use test::Bencher;
     use std::time::Instant;
+    use crate::utils::AddressHasher;
 
     #[test]
     fn numa_nodes() {
@@ -260,7 +322,7 @@ mod test {
 
     #[bench]
     fn lfmap(b: &mut Bencher) {
-        let map = WordMap::<System>::with_capacity(128);
+        let map = WordMap::<Global, PassthroughHasher>::with_capacity(128);
         let mut i = 5;
         b.iter(|| {
             map.insert(i, i);

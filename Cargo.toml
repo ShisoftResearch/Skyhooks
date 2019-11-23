@@ -22,6 +22,7 @@ errno = "*"
 rand = "*"
 rand_xoshiro = "*"
 lazy-init = "*"
+seahash = "*"
 
 [dependencies.regex]
 version = "1.3.1"

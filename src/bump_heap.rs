@@ -25,15 +25,15 @@ type SizeClasses<A: Alloc + Default> = [SizeClass<A>; BUMP_SIZE_CLASS];
 
 lazy_static! {
     static ref ALLOC_INNER: AllocatorInstance<MmapAllocator> = AllocatorInstance::new();
-    static ref MALLOC_SIZE: lfmap::WordMap<MmapAllocator> =
-        lfmap::WordMap::<MmapAllocator>::with_capacity(256);
+    static ref MALLOC_SIZE: lfmap::WordMap<MmapAllocator, AddressHasher> =
+        lfmap::WordMap::<MmapAllocator, AddressHasher>::with_capacity(256);
     static ref MAXIMUM_FREE_LIST_COVERED_SIZE: usize = maximum_free_list_covered_size();
 }
 
 pub struct AllocatorInstance<A: Alloc + Default> {
     tail: AtomicUsize,
     base: AtomicUsize,
-    address_map: lfmap::WordMap<A>,
+    address_map: lfmap::WordMap<A, AddressHasher>,
     sizes: SizeClasses<A>,
 }
 
@@ -269,6 +269,7 @@ mod test {
     use crate::Ptr;
     use lfmap::Map;
     use std::alloc::{GlobalAlloc, Layout};
+    use crate::utils::AddressHasher;
 
     #[test]
     pub fn generic() {
@@ -309,7 +310,7 @@ mod test {
 
     #[test]
     pub fn application() {
-        let map = lfmap::WordMap::<BumpAllocator>::with_capacity(1024);
+        let map = lfmap::WordMap::<BumpAllocator, AddressHasher>::with_capacity(1024);
         for i in 5..10240 {
             map.insert(i, i * 2);
         }
