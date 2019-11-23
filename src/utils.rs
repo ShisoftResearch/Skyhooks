@@ -11,6 +11,7 @@ use std::fs::read_dir;
 use std::hash::Hasher;
 use lfmap::hash;
 use std::collections::hash_map::DefaultHasher;
+use seahash::SeaHasher;
 
 pub const CACHE_LINE_SIZE: usize = 64;
 pub type CacheLineType = (usize, usize, usize, usize, usize, usize, usize, usize);
@@ -134,6 +135,10 @@ pub fn total_memory() -> usize {
 #[cfg(target_os = "linux")]
 pub fn current_cpu() -> usize {
     unsafe { (libc::sched_getcpu() as usize) }
+}
+
+pub fn cpu_id_from_tid(tid: usize) -> usize {
+    hash::<SeaHasher>(tid) % *NUM_CPU
 }
 
 #[cfg(not(target_os = "linux"))]

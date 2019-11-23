@@ -139,9 +139,9 @@ pub fn size_of(ptr: Ptr) -> Option<usize> {
 
 impl ThreadMeta {
     pub fn new() -> Self {
-        let cpu_id = current_cpu();
-        let numa_id = numa_from_cpu_id(cpu_id);
         let tid = current_thread_id();
+        let cpu_id = cpu_id_from_tid(tid);
+        let numa_id = numa_from_cpu_id(cpu_id);
         set_node_affinity(numa_id, tid as u64);
         Self {
             numa: numa_id,
