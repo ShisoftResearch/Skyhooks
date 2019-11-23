@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::Arc;
 use std::cmp::min;
 use std::alloc::Global;
+use crate::bump_heap::BumpAllocator;
 
 const MAX_BINS: usize = 16;
 const BIN_INDEX_MASK: usize = MAX_BINS - 1;
@@ -21,7 +22,7 @@ pub struct Producer {
 }
 
 pub struct EvMap {
-    map: lfmap::WordMap<Global, AddressHasher>,
+    map: lfmap::WordMap<BumpAllocator, AddressHasher>,
     source: EvBins,
 }
 
