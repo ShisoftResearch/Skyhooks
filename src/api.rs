@@ -13,7 +13,7 @@ thread_local! {
 }
 lazy_static! {
     static ref RUST_ADDR_MAPPING: lfmap::WordMap<MmapAllocator> =
-        lfmap::WordMap::<MmapAllocator>::with_capacity(2048);
+        lfmap::WordMap::<MmapAllocator>::with_capacity(256);
 }
 
 pub unsafe fn nu_malloc(size: Size) -> Ptr {

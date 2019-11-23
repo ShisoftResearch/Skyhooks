@@ -36,7 +36,7 @@ impl EvMap {
             source.push(EvBin::new());
         }
         Self {
-            map: WordMap::with_capacity(4096),
+            map: WordMap::with_capacity(256),
             source: Arc::new(source),
         }
     }

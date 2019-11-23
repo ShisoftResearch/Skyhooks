@@ -32,6 +32,8 @@ const EXCHANGE_WAITING: usize = 1;
 const EXCHANGE_BUSY: usize = 2;
 const EXCHANGE_SPIN_WAIT_NS: usize = 200;
 
+const DROP_FLAG: usize = 1 << (64 - 1); // 64 is bits of the architecture
+
 type ExchangeData<T> = Option<(usize, T)>;
 
 struct BufferMeta<T: Default, A: Alloc + Default> {
@@ -473,7 +475,7 @@ impl<T: Default, A: Alloc + Default> BufferMeta<T, A> {
         let next_ptr = buffer.next.load(Relaxed);
         let backoff = Backoff::new();
         let word_bits = mem::size_of::<usize>() << 3;
-        let flag = 1 << (word_bits - 1);
+        let flag = DROP_FLAG;
         loop {
             let rc = buffer.refs.load(Relaxed);
             if rc > flag {
@@ -586,7 +588,7 @@ impl<A: Alloc + Default> WordList<A> {
         }
     }
     pub fn new() -> Self {
-        Self::with_capacity(512)
+        Self::with_capacity(128)
     }
     pub fn push(&self, data: usize) {
         debug_assert_ne!(data, 0);
