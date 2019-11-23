@@ -21,28 +21,28 @@ use crossbeam::utils::Backoff;
 
 const BUMP_SIZE_CLASS: usize = NUM_SIZE_CLASS << 1;
 
-type SizeClasses = [SizeClass; BUMP_SIZE_CLASS];
+type SizeClasses<A: Alloc + Default> = [SizeClass<A>; BUMP_SIZE_CLASS];
 
 lazy_static! {
-    static ref ALLOC_INNER: AllocatorInner = AllocatorInner::new();
+    static ref ALLOC_INNER: AllocatorInstance<MmapAllocator> = AllocatorInstance::new();
     static ref MALLOC_SIZE: lfmap::WordMap<MmapAllocator> =
-        lfmap::WordMap::<MmapAllocator>::with_capacity(4096);
+        lfmap::WordMap::<MmapAllocator>::with_capacity(256);
     static ref MAXIMUM_FREE_LIST_COVERED_SIZE: usize = maximum_free_list_covered_size();
 }
 
-pub struct AllocatorInner {
+pub struct AllocatorInstance<A: Alloc + Default> {
     tail: AtomicUsize,
     base: AtomicUsize,
-    address_map: lfmap::WordMap<MmapAllocator>,
-    sizes: SizeClasses,
+    address_map: lfmap::WordMap<A>,
+    sizes: SizeClasses<A>,
 }
 
-struct SizeClass {
+struct SizeClass<A: Alloc + Default> {
     size: usize,
-    free_list: lflist::WordList<MmapAllocator>,
+    free_list: lflist::WordList<A>,
 }
 
-pub const HEAP_VIRT_SIZE: usize = 128 * 1024 * 1024; // 256MB
+pub const HEAP_VIRT_SIZE: usize = 128 * 1024 * 1024; // 128MB
 
 fn allocate_address_space() -> Ptr {
     mmap_without_fd(HEAP_VIRT_SIZE)
@@ -54,7 +54,7 @@ fn dealloc_address_space(address: Ptr) {
     munmap_memory(address, HEAP_VIRT_SIZE);
 }
 
-impl AllocatorInner {
+impl <A: Alloc + Default> AllocatorInstance <A> {
     pub fn new() -> Self {
         let addr = allocate_address_space();
         Self {
@@ -65,7 +65,7 @@ impl AllocatorInner {
         }
     }
 
-    fn bump_allocate(&self, size: usize) -> usize {
+    pub fn bump_allocate(&self, size: usize) -> usize {
         let backoff = Backoff::new();
         loop {
             let base = self.base.load(Relaxed);
@@ -127,7 +127,7 @@ impl AllocatorInner {
     }
 }
 
-unsafe impl GlobalAlloc for AllocatorInner {
+unsafe impl <A: Alloc + Default> GlobalAlloc for AllocatorInstance<A> {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let align = layout.align();
         let (actual_size, size_class_index) = self.size_of_object(&layout);
@@ -170,7 +170,7 @@ unsafe impl Alloc for BumpAllocator {
     }
 }
 
-impl SizeClass {
+impl <A: Alloc + Default> SizeClass <A> {
     pub fn new(size: usize) -> Self {
         Self {
             size,
@@ -213,15 +213,15 @@ pub unsafe fn free(ptr: Ptr) -> bool {
     }
 }
 
-fn size_classes() -> SizeClasses {
-    let mut data: [MaybeUninit<SizeClass>; BUMP_SIZE_CLASS] =
+fn size_classes<A: Alloc + Default>() -> SizeClasses<A> {
+    let mut data: [MaybeUninit<SizeClass<A>>; BUMP_SIZE_CLASS] =
         unsafe { MaybeUninit::uninit().assume_init() };
     let mut size = 2;
     for elem in &mut data[..] {
         *elem = MaybeUninit::new(SizeClass::new(size));
         size *= 2;
     }
-    unsafe { mem::transmute::<_, SizeClasses>(data) }
+    unsafe { mem::transmute::<_, SizeClasses<A>>(data) }
 }
 
 #[inline]
