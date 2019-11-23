@@ -130,20 +130,16 @@ impl<T: Default + Copy, A: Alloc + Default> List<T, A> {
                     return;
                 }
             }
-            if self.exchange.worth_exchange(page.refs.load(Relaxed)) {
-                match self.exchange.exchange(Some((flag, data))) {
-                    Ok(Some(tuple)) | Err(Some(tuple)) => {
-                        // exchanged a push, reset this push parameters
-                        flag = tuple.0;
-                        data = tuple.1;
-                    }
-                    Ok(None) | Err(None) => {
-                        // pushed to other popping thread
-                        return;
-                    }
+            match self.exchange.exchange(Some((flag, data))) {
+                Ok(Some(tuple)) | Err(Some(tuple)) => {
+                    // exchanged a push, reset this push parameters
+                    flag = tuple.0;
+                    data = tuple.1;
                 }
-            } else {
-                backoff.spin();
+                Ok(None) | Err(None) => {
+                    // pushed to other popping thread
+                    return;
+                }
             }
         }
     }
@@ -270,19 +266,15 @@ impl<T: Default + Copy, A: Alloc + Default> List<T, A> {
             } else {
                 return res;
             }
-            if self.exchange.worth_exchange(page.refs.load(Relaxed)) {
-                match self.exchange.exchange(None) {
-                    Ok(Some(tuple)) | Err(Some(tuple)) => {
-                        // exchanged a push, return it
-                        self.count.fetch_sub(1, Relaxed);
-                        return Some(tuple);
-                    }
-                    Ok(None) | Err(None) => {
-                        // meet another pop
-                    }
+            match self.exchange.exchange(None) {
+                Ok(Some(tuple)) | Err(Some(tuple)) => {
+                    // exchanged a push, return it
+                    self.count.fetch_sub(1, Relaxed);
+                    return Some(tuple);
                 }
-            } else {
-                backoff.spin();
+                Ok(None) | Err(None) => {
+                    // meet another pop
+                }
             }
         }
     }
