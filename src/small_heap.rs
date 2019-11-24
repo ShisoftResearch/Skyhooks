@@ -23,10 +23,6 @@ use std::ops::Deref;
 
 type TSizeClasses = [SizeClass; NUM_SIZE_CLASS];
 
-thread_local! {
-    static THREAD_META: ThreadMeta = ThreadMeta::new()
-}
-
 lazy_static! {
     static ref PER_NODE_META: Vec<LazyWrapper<NodeMeta>> = gen_numa_node_list();
     static ref PER_CPU_META: Vec<LazyWrapper<CoreMeta>> = gen_core_meta();
@@ -44,12 +40,6 @@ struct SuperBlock {
     reservation: AtomicUsize,
     used: AtomicUsize,
     free_list: lflist::WordList<BumpAllocator>,
-}
-
-struct ThreadMeta {
-    numa: usize,
-    tid: usize,
-    cpu: usize,
 }
 
 struct NodeMeta {
@@ -80,22 +70,22 @@ pub fn allocate(size: usize) -> Ptr {
     let size_class_index = size_class_index_from_size(size);
     let max_size = *MAXIMUM_SIZE;
     debug_assert!(size <= *MAXIMUM_SIZE);
-    THREAD_META.with(|meta| {
-        let cpu_id = meta.cpu;
-        let cpu_meta = &PER_CPU_META[cpu_id];
-        // allocate memory from per-CPU size class list
-        let superblock = &cpu_meta.size_class_list[size_class_index];
-        let (addr, block) = superblock.allocate();
-        debug_assert_eq!(superblock.numa, meta.numa);
-        debug_assert_eq!(unsafe { &*(block as *const SuperBlock) }.numa, meta.numa);
-        if cfg!(debug_assertions) {
-            debug_check_cache_aligned(addr, size, 8);
-            debug_check_cache_aligned(addr, size, 16);
-            debug_check_cache_aligned(addr, size, 32);
-            debug_check_cache_aligned(addr, size, CACHE_LINE_SIZE);
-        }
-        return addr as Ptr;
-    })
+    let tid = current_thread_id();
+    let cpu_id = cpu_id_from_tid(tid);
+    let numa_id = numa_from_cpu_id(cpu_id);
+    let cpu_meta = &PER_CPU_META[cpu_id];
+    // allocate memory from per-CPU size class list
+    let superblock = &cpu_meta.size_class_list[size_class_index];
+    let (addr, block) = superblock.allocate();
+    debug_assert_eq!(superblock.numa, numa_id);
+    debug_assert_eq!(unsafe { &*(block as *const SuperBlock) }.numa, numa_id);
+    if cfg!(debug_assertions) {
+        debug_check_cache_aligned(addr, size, 8);
+        debug_check_cache_aligned(addr, size, 16);
+        debug_check_cache_aligned(addr, size, 32);
+        debug_check_cache_aligned(addr, size, CACHE_LINE_SIZE);
+    }
+    return addr as Ptr;
 }
 
 pub fn contains(ptr: Ptr) -> bool {
@@ -104,7 +94,9 @@ pub fn contains(ptr: Ptr) -> bool {
 }
 
 pub fn free(ptr: Ptr) -> bool {
-    let current_numa = THREAD_META.with(|meta| meta.numa);
+    let tid = current_thread_id();
+    let cpu_id = cpu_id_from_tid(tid);
+    let current_numa = numa_from_cpu_id(cpu_id);
     PER_NODE_META[current_numa]
         .pending_free
         .drop_out_all(Some(|(addr, _)| {
@@ -132,20 +124,6 @@ pub fn size_of(ptr: Ptr) -> Option<usize> {
         let superblock_ref = unsafe { &*(superblock_addr as *const SuperBlock) };
         superblock_ref.size
     })
-}
-
-impl ThreadMeta {
-    pub fn new() -> Self {
-        let tid = current_thread_id();
-        let cpu_id = cpu_id_from_tid(tid);
-        let numa_id = numa_from_cpu_id(cpu_id);
-        set_node_affinity(numa_id, tid as u64);
-        Self {
-            numa: numa_id,
-            cpu: cpu_id,
-            tid,
-        }
-    }
 }
 
 impl SizeClass {
