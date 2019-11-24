@@ -30,7 +30,7 @@ const SENTINEL_SLOT: usize = 1;
 const EXCHANGE_EMPTY: usize = 0;
 const EXCHANGE_WAITING: usize = 1;
 const EXCHANGE_BUSY: usize = 2;
-const EXCHANGE_SPIN_WAIT_NS: usize = 200;
+const EXCHANGE_SPIN_WAIT_NS: usize = 150;
 
 type ExchangeData<T> = Option<(usize, T)>;
 

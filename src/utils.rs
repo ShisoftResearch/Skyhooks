@@ -138,7 +138,8 @@ pub fn current_cpu() -> usize {
 }
 
 pub fn cpu_id_from_tid(tid: usize) -> usize {
-    hash::<SeaHasher>(tid) % *NUM_CPU
+    // hash::<SeaHasher>(tid) % *NUM_CPU
+    current_cpu()
 }
 
 #[cfg(not(target_os = "linux"))]
