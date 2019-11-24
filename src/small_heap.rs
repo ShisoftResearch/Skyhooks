@@ -31,7 +31,7 @@ lazy_static! {
     static ref PER_NODE_META: Vec<LazyWrapper<NodeMeta>> = gen_numa_node_list();
     static ref PER_CPU_META: Vec<LazyWrapper<CoreMeta>> = gen_core_meta();
     static ref SUPERBLOCK_SIZE: usize = *MAXIMUM_SIZE << 2;
-    static ref OBJECT_MAP: lfmap::WordMap<BumpAllocator, AddressHasher> = lfmap::WordMap::with_capacity(1024);
+    static ref OBJECT_MAP: evmap::EvMap = evmap::EvMap::new();
     pub static ref MAXIMUM_SIZE: usize = maximum_size();
 }
 
@@ -100,6 +100,7 @@ pub fn allocate(size: usize) -> Ptr {
 
 pub fn contains(ptr: Ptr) -> bool {
     let addr = ptr as usize;
+    OBJECT_MAP.refresh();
     OBJECT_MAP.contains(addr)
 }
 
@@ -113,6 +114,7 @@ pub fn free(ptr: Ptr) -> bool {
                 superblock_ref.dealloc(addr);
             }
         }));
+    OBJECT_MAP.refresh();
     let addr = ptr as usize;
     if let Some(superblock_addr) = OBJECT_MAP.get(addr) {
         let superblock_ref = unsafe { &*(superblock_addr as *const SuperBlock) };
