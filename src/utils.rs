@@ -37,6 +37,7 @@ pub struct AddressHasher {
 }
 
 impl Hasher for AddressHasher {
+    #[inline(always)]
     fn finish(&self) -> u64 {
         self.num
     }
@@ -45,6 +46,7 @@ impl Hasher for AddressHasher {
         unimplemented!()
     }
 
+    #[inline(always)]
     fn write_usize(&mut self, i: usize) {
         self.num = (i >> i.trailing_zeros()) as u64
     }

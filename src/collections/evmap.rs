@@ -56,7 +56,7 @@ impl EvMap {
         }
     }
 
-    pub fn refresh(&self, lookup: Option<usize>) -> Option<usize> {
+    pub fn refresh(&self, lookup: usize) -> Option<usize> {
         // get all items from producers and insert into the local map
         let mut lookup_res = 0;
         if self.source
@@ -65,7 +65,7 @@ impl EvMap {
             .flatten()
             .any(|p| {
                 p.list.drop_out_all(Some(|(_, (k, v))| {
-                    if lookup == Some(k) {
+                    if lookup == k {
                         lookup_res = v;
                     }
                     self.map.insert(k, v);

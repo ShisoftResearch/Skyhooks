@@ -100,6 +100,7 @@ impl<T: Default + Copy, A: Alloc + Default> List<T, A> {
                 let new_head = BufferMeta::new(self.buffer_cap);
                 unsafe {
                     (*new_head).next.store(head_ptr, Relaxed);
+                    debug_assert_eq!((*new_head).total_size, page.total_size);
                 }
                 if self.head.compare_and_swap(head_ptr, new_head, Relaxed) != head_ptr {
                     BufferMeta::unref(new_head);
@@ -306,7 +307,7 @@ impl<T: Default + Copy, A: Alloc + Default> List<T, A> {
         let mut buffer_ptr = self.head.swap(new_head_buffer, Relaxed);
         let null = null_mut();
         let mut counter = 0;
-        'main: while buffer_ptr != null {
+        while buffer_ptr != null {
             buffer_ptr = BufferMeta::drop_out(buffer_ptr, retain, &mut counter).unwrap_or(null);
         }
         self.count.fetch_sub(counter, Relaxed);
