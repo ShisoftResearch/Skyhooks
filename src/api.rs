@@ -8,6 +8,9 @@ use libc::*;
 use std::alloc::{Alloc, AllocErr};
 use std::ptr::{null_mut, NonNull};
 
+thread_local! {
+    pub static INNER_CALL: Cell<bool> = Cell::new(false);
+}
 lazy_static! {
     static ref RUST_ADDR_MAPPING: lfmap::WordMap<MmapAllocator, AddressHasher> =
         lfmap::WordMap::with_capacity(256);
@@ -17,13 +20,30 @@ pub unsafe fn nu_malloc(size: Size) -> Ptr {
     if size == 0 {
         return null_mut();
     } // The C standard (C17 7.22.3/1)
-    generic_heap::malloc(size)
+    INNER_CALL.with(|is_inner| {
+        if !is_inner.get() {
+            is_inner.set(true);
+            let res = generic_heap::malloc(size);
+            is_inner.set(false);
+            res
+        } else {
+            bump_heap::malloc(size)
+        }
+    })
 }
 pub unsafe fn nu_free(ptr: Ptr) {
     if ptr == null_mut() {
         return;
     }
-    generic_heap::free(ptr);
+    INNER_CALL.with(|is_inner| {
+        if !is_inner.get() {
+            is_inner.set(true);
+            generic_heap::free(ptr);
+            is_inner.set(false);
+        } else {
+            bump_heap::free(ptr);
+        }
+    })
 }
 
 pub unsafe fn nu_calloc(nmemb: Size, size: Size) -> Ptr {
@@ -37,7 +57,16 @@ pub unsafe fn nu_calloc(nmemb: Size, size: Size) -> Ptr {
 }
 
 pub unsafe fn nu_realloc(ptr: Ptr, size: Size) -> Ptr {
-    generic_heap::realloc(ptr, size)
+    INNER_CALL.with(|is_inner| {
+        if !is_inner.get() {
+            is_inner.set(true);
+            let res = generic_heap::realloc(ptr, size);
+            is_inner.set(false);
+            res
+        } else {
+            bump_heap::realloc(ptr, size)
+        }
+    })
 }
 
 // Allocator for rust itself for internal heaps

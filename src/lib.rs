@@ -64,4 +64,5 @@ pub unsafe fn realloc(ptr: Ptr, size: Size) -> Ptr {
 //#[global_allocator]
 //#[cfg(feature = "bump_heap_only")]
 
+#[global_allocator]
 static INNER_ALLOCATOR: BumpAllocator = BumpAllocator;
