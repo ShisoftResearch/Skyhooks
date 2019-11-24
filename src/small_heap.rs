@@ -1,5 +1,4 @@
 use super::*;
-use crate::collections::evmap::Producer;
 use crate::collections::fixvec::FixedVec;
 use crate::collections::lflist::WordList;
 use crate::collections::{evmap, lflist};
@@ -14,7 +13,6 @@ use lfmap::{Map, WordMap};
 use std::alloc::GlobalAlloc;
 use std::cell::{Cell, RefCell};
 use std::clone::Clone;
-use std::os::unix::thread::JoinHandleExt;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;
 use std::thread;
@@ -69,11 +67,6 @@ struct SizeClass {
 
 struct CoreMeta {
     size_class_list: TSizeClasses,
-}
-
-struct LazyWrapper<T: Sync> {
-    inner: Lazy<T>,
-    init: Box<dyn Fn() -> T>
 }
 
 pub fn allocate(size: usize) -> Ptr {
@@ -236,7 +229,7 @@ impl SuperBlock {
                 let new_addr = addr + self.size;
                 if self.reservation.compare_and_swap(addr, new_addr, Relaxed) == addr {
                     // insert to per CPU cache to avoid synchronization
-                    OBJECT_MAP.insert_to_cpu(addr, self as *const Self as usize, self.cpu);
+                    OBJECT_MAP.insert_to_cpu(addr, self as *const Self as usize, self.numa, self.cpu);
                     return Some(addr);
                 }
             }
@@ -255,27 +248,6 @@ impl SuperBlock {
         self.used.fetch_sub(self.size, Relaxed);
     }
 }
-
-impl <T: Sync> LazyWrapper<T> {
-    pub fn new(create: Box<dyn Fn() -> T>) -> Self {
-        Self {
-            inner: Lazy::new(),
-            init: create
-        }
-    }
-}
-
-impl <T: Sync> Deref for LazyWrapper<T> {
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target {
-        self.inner.get_or_create(|| {
-            (self.init)()
-        })
-    }
-}
-
-unsafe impl <T: Sync> Sync for LazyWrapper<T> {}
 
 fn gen_numa_node_list() -> Vec<LazyWrapper<NodeMeta>> {
     let num_nodes = *NUM_NUMA_NODES;

@@ -12,6 +12,8 @@ use std::hash::Hasher;
 use lfmap::hash;
 use std::collections::hash_map::DefaultHasher;
 use seahash::SeaHasher;
+use lazy_init::Lazy;
+use std::ops::Deref;
 
 pub const CACHE_LINE_SIZE: usize = 64;
 pub type CacheLineType = (usize, usize, usize, usize, usize, usize, usize, usize);
@@ -216,6 +218,43 @@ pub fn debug_validate(ptr: Ptr, size: Size) -> Ptr {
         ptr
     }
 }
+
+pub fn upper_power_of_2(mut v: usize) -> usize {
+    v -= 1;
+    v |= v >> 1;
+    v |= v >> 2;
+    v |= v >> 4;
+    v |= v >> 8;
+    v |= v >> 16;
+    v += 1;
+    return v;
+}
+
+pub struct LazyWrapper<T: Sync> {
+    inner: Lazy<T>,
+    init: Box<dyn Fn() -> T>
+}
+
+impl <T: Sync> LazyWrapper<T> {
+    pub fn new(create: Box<dyn Fn() -> T>) -> Self {
+        Self {
+            inner: Lazy::new(),
+            init: create
+        }
+    }
+}
+
+impl <T: Sync> Deref for LazyWrapper<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        self.inner.get_or_create(|| {
+            (self.init)()
+        })
+    }
+}
+
+unsafe impl <T: Sync> Sync for LazyWrapper<T> {}
 
 #[cfg(test)]
 mod test {
