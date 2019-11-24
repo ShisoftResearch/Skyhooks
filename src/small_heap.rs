@@ -93,8 +93,8 @@ pub fn allocate(size: usize) -> Ptr {
 
 pub fn contains(ptr: Ptr) -> bool {
     let addr = ptr as usize;
-    OBJECT_MAP.refresh();
-    OBJECT_MAP.contains(addr)
+    OBJECT_MAP.refresh(Some(addr)).map(|_| true).unwrap_or_else(|| OBJECT_MAP.contains(addr))
+
 }
 
 pub fn free(ptr: Ptr) -> bool {
@@ -107,9 +107,8 @@ pub fn free(ptr: Ptr) -> bool {
                 superblock_ref.dealloc(addr);
             }
         }));
-    OBJECT_MAP.refresh();
     let addr = ptr as usize;
-    if let Some(superblock_addr) = OBJECT_MAP.get(addr) {
+    if let Some(superblock_addr) = OBJECT_MAP.refresh(Some(addr)).or_else(|| OBJECT_MAP.get(addr)) {
         let superblock_ref = unsafe { &*(superblock_addr as *const SuperBlock) };
         if superblock_ref.numa == current_numa {
             superblock_ref.dealloc(addr);
@@ -123,11 +122,12 @@ pub fn free(ptr: Ptr) -> bool {
 }
 pub fn size_of(ptr: Ptr) -> Option<usize> {
     let addr = ptr as usize;
-    OBJECT_MAP.refresh();
-    OBJECT_MAP.get(ptr as usize).map(|superblock_addr| {
-        let superblock_ref = unsafe { &*(superblock_addr as *const SuperBlock) };
-        superblock_ref.size
-    })
+    OBJECT_MAP.refresh(Some(addr))
+        .or_else(|| OBJECT_MAP.get(addr))
+        .map(|superblock_addr| {
+            let superblock_ref = unsafe { &*(superblock_addr as *const SuperBlock) };
+            superblock_ref.size
+        })
 }
 
 impl ThreadMeta {

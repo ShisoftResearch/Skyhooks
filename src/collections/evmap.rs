@@ -56,17 +56,27 @@ impl EvMap {
         }
     }
 
-    pub fn refresh(&self) {
+    pub fn refresh(&self, lookup: Option<usize>) -> Option<usize> {
         // get all items from producers and insert into the local map
-        self.source
+        let mut lookup_res = 0;
+        if self.source
             .iter()
             .map(|c| c.bins.iter())
             .flatten()
-            .for_each(|p| {
+            .any(|p| {
                 p.list.drop_out_all(Some(|(_, (k, v))| {
+                    if lookup == Some(k) {
+                        lookup_res = v;
+                    }
                     self.map.insert(k, v);
                 }));
-            });
+                lookup_res != 0
+            })
+        {
+            Some(lookup_res)
+        } else {
+            None
+        }
     }
 
     pub fn insert_to_cpu(&self, key: usize, value: usize, numa_id: usize, cpu_id: usize) {

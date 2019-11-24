@@ -636,7 +636,7 @@ impl<T: Default + Copy, A: Alloc + Default> ObjectList<T, A> {
 
     pub fn drop_out_all<F>(&self, retain: Option<F>)
     where
-        F: Fn((usize, T)),
+        F: FnMut((usize, T)),
     {
         self.inner.drop_out_all(retain)
     }
