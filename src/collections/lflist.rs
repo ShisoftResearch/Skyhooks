@@ -286,10 +286,10 @@ impl<T: Default + Copy, A: Alloc + Default> List<T, A> {
         if count == 0 {
             return;
         }
-        let pop_threshold = self.buffer_cap >> 1;
-        let pop_amount = pop_threshold << 1; // double of the threshold
         let retain = retain.borrow_mut();
+        let pop_threshold = min(self.buffer_cap >> 1, 64);
         if count < pop_threshold {
+            let pop_amount = pop_threshold << 1; // double of the threshold
             for _ in 0..pop_amount {
                 if let Some(pair) = self.pop() {
                     if let Some(retain) = retain {

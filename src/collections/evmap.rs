@@ -98,7 +98,7 @@ impl EvMap {
 impl EvBin {
     pub fn new() -> Self {
         Self {
-            list: lflist::ObjectList::with_capacity(128)
+            list: lflist::ObjectList::with_capacity(8) // fit into 2 cache lines
         }
     }
 
