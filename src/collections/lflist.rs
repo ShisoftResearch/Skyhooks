@@ -783,7 +783,7 @@ impl<T: Default + Copy, A: Alloc + Default> ExchangeArray<T, A> {
     pub fn new() -> Self {
         let num_cpus = *NUM_CPU;
         let default_capacity = num_cpus >> 3;
-        Self::with_capacity(max(default_capacity, 2))
+        Self::with_capacity(max(default_capacity, 2) as usize)
     }
 
     pub fn with_capacity(cap: usize) -> Self {
