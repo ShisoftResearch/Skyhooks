@@ -7,7 +7,7 @@ use crate::utils::*;
 use core::ptr;
 use core::mem;
 use core::mem::MaybeUninit;
-use core::sync::atomic::AtomicUsize;
+use core::sync::atomic::{AtomicUsize, AtomicU32};
 use crossbeam_queue::SegQueue;
 use lfmap::{Map, WordMap};
 use std::alloc::GlobalAlloc;
@@ -37,10 +37,9 @@ struct SuperBlock {
     cpu: u16,
     numa: u16,
     size: u32,
+    reservation: AtomicU32,
+    used: AtomicU32,
     data_base: usize,
-    boundary: usize,
-    reservation: AtomicUsize,
-    used: AtomicUsize,
     free_list: lflist::WordList<BumpAllocator>,
 }
 
@@ -197,7 +196,6 @@ impl SuperBlock {
         // use bump_allocate function for it just allocate, do't record object address
         let addr = node_allocator.bump_allocate(chunk_size);
         let data_base = addr + self_size_with_padding;
-        let boundary = data_base + *SUPERBLOCK_SIZE;
         let ptr = addr as *mut Self;
 
         // ensure cache aligned
@@ -209,10 +207,9 @@ impl SuperBlock {
                 numa,
                 size,
                 data_base,
-                boundary,
                 cpu,
-                reservation: AtomicUsize::new(data_base),
-                used: AtomicUsize::new(0),
+                reservation: AtomicU32::new(0),
+                used: AtomicU32::new(0),
                 free_list: lflist::WordList::new(),
             });
         }
@@ -222,20 +219,22 @@ impl SuperBlock {
 
     fn allocate(&self) -> Option<usize> {
         let res = self.free_list.pop().or_else(|| loop {
-            let addr = self.reservation.load(Relaxed);
-            if addr >= self.boundary {
+            let pos = self.reservation.load(Relaxed);
+            let pos_ext = pos as usize;
+            if pos_ext as usize >= *SUPERBLOCK_SIZE {
                 return None;
             } else {
-                let new_addr = addr + self.size as usize;
-                if self.reservation.compare_and_swap(addr, new_addr, Relaxed) == addr {
+                let new_pos = pos + self.size;
+                if self.reservation.compare_and_swap(pos, new_pos, Relaxed) == pos {
                     // insert to per CPU cache to avoid synchronization
-                    OBJECT_MAP.insert_to_cpu(addr, self as *const Self as usize, self.numa, self.cpu);
-                    return Some(addr);
+                    let address = pos_ext + self.data_base;
+                    OBJECT_MAP.insert_to_cpu(address, self as *const Self as usize, self.numa, self.cpu);
+                    return Some(address);
                 }
             }
         });
         if res.is_some() {
-            self.used.fetch_add(self.size as usize, Relaxed);
+            self.used.fetch_add(self.size, Relaxed);
             debug_validate(res.unwrap() as Ptr, self.size as usize);
         }
         return res;
@@ -245,7 +244,7 @@ impl SuperBlock {
         debug_assert!(addr >= self.data_base && addr < self.data_base + *SUPERBLOCK_SIZE);
         debug_assert_eq!((addr - self.data_base) % self.size as usize, 0);
         self.free_list.push(addr);
-        self.used.fetch_sub(self.size as usize, Relaxed);
+        self.used.fetch_sub(self.size, Relaxed);
     }
 }
 
