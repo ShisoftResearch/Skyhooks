@@ -25,10 +25,10 @@ const HASH_MAGIC_NUMBER_3: usize = 362436069;
 
 lazy_static! {
     pub static ref SYS_PAGE_SIZE: usize = unsafe { sysconf(_SC_PAGESIZE) as usize };
-    pub static ref SYS_NODE_CPUS: HashMap<usize, Vec<usize>> = node_topology();
-    pub static ref SYS_CPU_NODE: HashMap<usize, usize> = cpu_topology();
-    pub static ref NUM_NUMA_NODES: usize = num_numa_nodes();
-    pub static ref NUM_CPU: usize = unsafe { libc::sysconf(libc::_SC_NPROCESSORS_ONLN) as usize };
+    pub static ref SYS_NODE_CPUS: HashMap<u16, Vec<u16>> = node_topology();
+    pub static ref SYS_CPU_NODE: HashMap<u16, u16> = cpu_topology();
+    pub static ref NUM_NUMA_NODES: u16 = num_numa_nodes();
+    pub static ref NUM_CPU: u16 = unsafe { libc::sysconf(libc::_SC_NPROCESSORS_ONLN) as u16 };
     pub static ref SYS_TOTAL_MEM: usize = total_memory();
 }
 
@@ -63,11 +63,11 @@ pub fn align_padding(len: usize, align: usize) -> usize {
     len_rounded_up.wrapping_sub(len)
 }
 
-pub fn current_thread_id() -> usize {
-    unsafe { libc::pthread_self() as usize }
+pub fn current_thread_id() -> u32 {
+    unsafe { libc::pthread_self() as u32 }
 }
 
-pub fn cpu_topology() -> HashMap<usize, usize> {
+pub fn cpu_topology() -> HashMap<u16, u16> {
     let cpus = SYS_NODE_CPUS.iter()
         .map(|(node, cpus)| {
             let node = *node;
@@ -82,7 +82,7 @@ pub fn cpu_topology() -> HashMap<usize, usize> {
     cpus
 }
 
-pub fn node_topology() -> HashMap<usize, Vec<usize>> {
+pub fn node_topology() -> HashMap<u16, Vec<u16>> {
     let node_regex = Regex::new(r"node[0-9]*$").unwrap();
     let cpu_regex = Regex::new(r"cpu[0-9]*$").unwrap();
     let number_regex = Regex::new(r"\d+").unwrap();
@@ -102,7 +102,7 @@ pub fn node_topology() -> HashMap<usize, Vec<usize>> {
             .filter(|(file_name, _)| node_regex.is_match(file_name))
             .map(|(node_name, de)| {
                 let node_num = number_regex.captures_iter(&node_name).next().unwrap()[0]
-                    .parse::<usize>()
+                    .parse::<u16>()
                     .unwrap();
                 let path = de.path();
                 let node_dir = read_dir(path).unwrap();
@@ -111,7 +111,7 @@ pub fn node_topology() -> HashMap<usize, Vec<usize>> {
                     .filter(|f| cpu_regex.is_match(f))
                     .map(|f| {
                         let id = number_regex.captures_iter(&f).next().unwrap()[0]
-                            .parse::<usize>()
+                            .parse::<u16>()
                             .unwrap();
                         id
                     })
@@ -120,15 +120,15 @@ pub fn node_topology() -> HashMap<usize, Vec<usize>> {
                 (node_num, cpus)
             })
             .collect(),
-        Err(_) => vec![(0, (0..num_cpus::get()).map(|n| n).collect())].into_iter().collect(),
+        Err(_) => vec![(0, (0..num_cpus::get() as u16).map(|n| n).collect())].into_iter().collect(),
     }
 }
 
-pub fn num_numa_nodes() -> usize {
+pub fn num_numa_nodes() -> u16 {
     let mut vec = SYS_CPU_NODE.iter().map(|(_, v)| *v).collect::<Vec<_>>();
     vec.sort();
     vec.dedup();
-    vec.len()
+    vec.len() as u16
 }
 
 pub fn total_memory() -> usize {
@@ -137,54 +137,54 @@ pub fn total_memory() -> usize {
 }
 
 #[cfg(target_os = "linux")]
-pub fn current_cpu() -> usize {
-    unsafe { (libc::sched_getcpu() as usize) }
+pub fn current_cpu() -> u16 {
+    unsafe { libc::sched_getcpu() as u16 }
 }
 
-pub fn cpu_id_from_tid(tid: usize) -> usize {
-    hash::<SeaHasher>(tid) % *NUM_CPU
+pub fn cpu_id_from_tid(tid: u32) -> u16 {
+    (hash::<SeaHasher>(tid as usize) % (*NUM_CPU) as usize) as u16
 }
 
 #[cfg(not(target_os = "linux"))]
-pub fn current_cpu() -> usize {
-    current_thread_id() % *NUM_CPU
+pub fn current_cpu() -> u16 {
+    (current_thread_id() % (*NUM_CPU) as u32) as u16
 }
 
 #[cfg(target_os = "linux")]
-pub fn current_numa() -> usize {
+pub fn current_numa() -> u16 {
     let cpu = current_cpu();
     numa_from_cpu_id(cpu)
 }
 
 #[cfg(target_os = "linux")]
-pub fn numa_from_cpu_id(cpu_id: usize) -> usize {
+pub fn numa_from_cpu_id(cpu_id: u16) -> u16 {
     SYS_CPU_NODE.get(&cpu_id).map(|x| *x).unwrap_or(0)
 }
 
 #[cfg(not(target_os = "linux"))]
-pub fn numa_from_cpu_id(cpu_id: usize) -> usize {
+pub fn numa_from_cpu_id(cpu_id: u16) -> u16 {
     0
 }
 
 #[cfg(not(target_os = "linux"))]
-pub fn current_numa() -> usize {
+pub fn current_numa() -> u16 {
     0
 }
 
 #[cfg(target_os = "linux")]
-pub fn set_node_affinity(node_id: usize, thread_id: u64) {
+pub fn set_node_affinity(node_id: u16, thread_id: u32) {
     unsafe {
         let mut set: libc::cpu_set_t = std::mem::zeroed();
         SYS_NODE_CPUS[&node_id]
             .iter()
             .map(|cpu| *cpu)
-            .for_each(|cpu| libc::CPU_SET(cpu, &mut set));
-        libc::pthread_setaffinity_np(thread_id, std::mem::size_of::<libc::cpu_set_t>(), &set);
+            .for_each(|cpu| libc::CPU_SET(cpu as usize, &mut set));
+        libc::pthread_setaffinity_np(thread_id as u64, std::mem::size_of::<libc::cpu_set_t>(), &set);
     }
 }
 
 #[cfg(not(target_os = "linux"))]
-pub fn set_node_affinity(node_id: usize, thread_id: u64) {
+pub fn set_node_affinity(node_id: u16, thread_id: u32) {
     // TODO: Make it work for non-linux systems
 }
 
@@ -211,11 +211,11 @@ pub fn dealloc_mem<A: Alloc + Default>(ptr: usize, size: usize) {
 }
 
 #[inline(always)]
-pub fn debug_validate(ptr: Ptr, size: Size) -> Ptr {
+pub fn debug_validate(ptr: Ptr, size: usize) -> Ptr {
     unsafe {
         debug!(
             "Validated address: {:x}",
-            libc::memset(ptr, 0, size) as usize
+            libc::memset(ptr, 0, size as usize) as usize
         );
         ptr
     }

@@ -27,13 +27,13 @@ struct EvBin {
 
 struct NumaBin {
     bins: Vec<LazyWrapper<EvBin>>,
-    cpu_mask: usize
+    cpu_mask: u16
 }
 
 impl EvMap {
     pub fn new() -> Self {
         let nodes = *NUM_NUMA_NODES;
-        let mut source = Vec::with_capacity(nodes);
+        let mut source = Vec::with_capacity(nodes as usize);
         for i in 0..nodes {
             source.push(LazyWrapper::new(Box::new(move || {
                 let node = i;
@@ -46,7 +46,7 @@ impl EvMap {
                 }
                 NumaBin {
                     bins: cpu_source,
-                    cpu_mask: cpu_slots - 1
+                    cpu_mask: cpu_slots as u16 - 1
                 }
             })));
         }
@@ -79,9 +79,9 @@ impl EvMap {
         }
     }
 
-    pub fn insert_to_cpu(&self, key: usize, value: usize, numa_id: usize, cpu_id: usize) {
-        let node = &self.source[numa_id];
-        node.bins[cpu_id & node.cpu_mask].push(key, value);
+    pub fn insert_to_cpu(&self, key: usize, value: usize, numa_id: u16, cpu_id: u16) {
+        let node = &self.source[numa_id as usize];
+        node.bins[(cpu_id & node.cpu_mask) as usize].push(key, value);
     }
 
     #[inline]
