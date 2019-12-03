@@ -138,7 +138,7 @@ pub fn total_memory() -> usize {
 
 #[cfg(target_os = "linux")]
 pub fn current_cpu() -> u16 {
-    unsafe { (libc::sched_getcpu() as usize) }
+    unsafe { libc::sched_getcpu() as u16 }
 }
 
 pub fn cpu_id_from_tid(tid: u32) -> u16 {
@@ -157,7 +157,7 @@ pub fn current_numa() -> u16 {
 }
 
 #[cfg(target_os = "linux")]
-pub fn numa_from_cpu_id(cpu_id: usize) -> u16 {
+pub fn numa_from_cpu_id(cpu_id: u16) -> u16 {
     SYS_CPU_NODE.get(&cpu_id).map(|x| *x).unwrap_or(0)
 }
 
@@ -175,11 +175,11 @@ pub fn current_numa() -> u16 {
 pub fn set_node_affinity(node_id: u16, thread_id: u32) {
     unsafe {
         let mut set: libc::cpu_set_t = std::mem::zeroed();
-        SYS_NODE_CPUS[&node_id as u16]
+        SYS_NODE_CPUS[&node_id]
             .iter()
             .map(|cpu| *cpu)
-            .for_each(|cpu| libc::CPU_SET(cpu, &mut set));
-        libc::pthread_setaffinity_np(thread_id, std::mem::size_of::<libc::cpu_set_t>(), &set);
+            .for_each(|cpu| libc::CPU_SET(cpu as usize, &mut set));
+        libc::pthread_setaffinity_np(thread_id as u64, std::mem::size_of::<libc::cpu_set_t>(), &set);
     }
 }
 
