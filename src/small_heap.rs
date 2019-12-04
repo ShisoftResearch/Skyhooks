@@ -29,7 +29,8 @@ lazy_static! {
     static ref PER_NODE_META: Vec<LazyWrapper<NodeMeta>> = gen_numa_node_list();
     static ref PER_CPU_META: Vec<LazyWrapper<CoreMeta>> = gen_core_meta();
     static ref SUPERBLOCK_SIZE: usize = *MAXIMUM_SIZE << 2;
-    static ref OBJECT_MAP: evmap::EvMap = evmap::EvMap::new();
+    static ref OBJECT_MAP: lfmap::WordMap =
+        lfmap::WordMap::with_capacity(PER_NODE_META.len() * CACHE_LINE_SIZE);
     pub static ref MAXIMUM_SIZE: usize = maximum_size();
 }
 
@@ -92,7 +93,7 @@ pub fn allocate(size: usize) -> Ptr {
 
 pub fn contains(ptr: Ptr) -> bool {
     let addr = ptr as usize;
-    OBJECT_MAP.refresh(addr).map(|_| true).unwrap_or_else(|| OBJECT_MAP.contains(addr))
+    OBJECT_MAP.contains(addr)
 
 }
 
@@ -107,7 +108,7 @@ pub fn free(ptr: Ptr) -> bool {
             }
         }));
     let addr = ptr as usize;
-    if let Some(superblock_addr) = OBJECT_MAP.refresh(addr).or_else(|| OBJECT_MAP.get(addr)) {
+    if let Some(superblock_addr) = OBJECT_MAP.get(addr) {
         let superblock_ref = unsafe { &*(superblock_addr as *const SuperBlock) };
         if superblock_ref.numa == current_numa {
             superblock_ref.dealloc(addr);
@@ -121,8 +122,7 @@ pub fn free(ptr: Ptr) -> bool {
 }
 pub fn size_of(ptr: Ptr) -> Option<usize> {
     let addr = ptr as usize;
-    OBJECT_MAP.refresh(addr)
-        .or_else(|| OBJECT_MAP.get(addr))
+    OBJECT_MAP.get(addr)
         .map(|superblock_addr| {
             let superblock_ref = unsafe { &*(superblock_addr as *const SuperBlock) };
             superblock_ref.size as usize
@@ -228,7 +228,7 @@ impl SuperBlock {
                 if self.reservation.compare_and_swap(pos, new_pos, Relaxed) == pos {
                     // insert to per CPU cache to avoid synchronization
                     let address = pos_ext + self.data_base;
-                    OBJECT_MAP.insert_to_cpu(address, self as *const Self as usize, self.numa, self.cpu);
+                    OBJECT_MAP.insert(address, self as *const Self as usize);
                     return Some(address);
                 }
             }
