@@ -198,14 +198,14 @@ impl Default for BumpAllocator {
 }
 
 pub unsafe fn malloc(size: Size) -> Ptr {
-    let layout = Layout::from_size_align(size, 1).unwrap();
+    let layout = Layout::from_size_align(size, CACHE_LINE_SIZE).unwrap();
     let ptr = BumpAllocator.alloc(layout) as Ptr;
     MALLOC_SIZE.insert(ptr as usize, size as usize);
     ptr
 }
 pub unsafe fn free(ptr: Ptr) -> bool {
     if let Some(size) = MALLOC_SIZE.remove(ptr as usize) {
-        let layout = Layout::from_size_align(size, 1).unwrap();
+        let layout = Layout::from_size_align(size, CACHE_LINE_SIZE).unwrap();
         BumpAllocator.dealloc(ptr as *mut u8, layout);
         true
     } else {

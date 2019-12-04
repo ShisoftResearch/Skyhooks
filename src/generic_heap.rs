@@ -47,8 +47,8 @@ pub unsafe fn realloc(ptr: Ptr, size: Size) -> Ptr {
         free(ptr);
         return NULL_PTR;
     }
-    let old_size = if let Some(_) = large_heap::size_of(ptr) {
-        size
+    let old_size = if let Some(large_old_size) = large_heap::size_of(ptr) {
+        large_old_size
     } else {
         small_heap::size_of(ptr)
     };
