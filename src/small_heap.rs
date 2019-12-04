@@ -30,7 +30,7 @@ lazy_static! {
     static ref PER_CPU_META: Vec<LazyWrapper<CoreMeta>> = gen_core_meta();
     static ref SUPERBLOCK_SIZE: usize = *MAXIMUM_SIZE << 2;
     static ref OBJECT_MAP: lfmap::WordMap =
-        lfmap::WordMap::with_capacity(PER_NODE_META.len() * CACHE_LINE_SIZE);
+        lfmap::WordMap::with_capacity(upper_power_of_2(PER_NODE_META.len() * CACHE_LINE_SIZE));
     pub static ref MAXIMUM_SIZE: usize = maximum_size();
 }
 
