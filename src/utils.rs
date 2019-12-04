@@ -234,6 +234,7 @@ pub fn upper_power_of_2(mut v: usize) -> usize {
     return v;
 }
 
+#[repr(align(4096))]
 pub struct LazyWrapper<T: Sync> {
     inner: Lazy<T>,
     init: Box<dyn Fn() -> T>
