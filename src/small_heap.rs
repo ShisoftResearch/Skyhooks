@@ -18,8 +18,11 @@ use std::sync::Arc;
 use std::thread;
 use lazy_init::Lazy;
 use std::ops::Deref;
+use std::cmp::{min, max};
 
 type TSizeClasses = [SizeClass; NUM_SIZE_CLASS];
+
+pub const MIN_SIZE: usize = 2;
 
 thread_local! {
     static THREAD_META: ThreadMeta = ThreadMeta::new()
@@ -29,7 +32,6 @@ lazy_static! {
     static ref PER_NODE_META: Vec<LazyWrapper<NodeMeta>> = gen_numa_node_list();
     static ref PER_CPU_META: Vec<LazyWrapper<CoreMeta>> = gen_core_meta();
     static ref SUPERBLOCK_SIZE: usize = *MAXIMUM_SIZE << 2;
-    static ref OBJECT_MAP: evmap::EvMap = evmap::EvMap::new();
     pub static ref MAXIMUM_SIZE: usize = maximum_size();
 }
 
@@ -39,7 +41,9 @@ struct SuperBlock {
     size: u32,
     reservation: AtomicU32,
     used: AtomicU32,
-    data_base: usize,
+    bookmark_size: u32,
+    entry_size: u32,
+    data_base_addr: usize,
     free_list: lflist::WordList<BumpAllocator>,
 }
 
@@ -76,9 +80,9 @@ pub fn allocate(size: usize) -> Ptr {
         let cpu_id = meta.cpu;
         let cpu_meta = &PER_CPU_META[cpu_id as usize];
         // allocate memory from per-CPU size class list
-        let superblock = &cpu_meta.size_class_list[size_class_index];
-        let (addr, block) = superblock.allocate();
-        debug_assert_eq!(superblock.numa, meta.numa);
+        let size_class = &cpu_meta.size_class_list[size_class_index];
+        let (addr, block) = size_class.allocate();
+        debug_assert_eq!(size_class.numa, meta.numa);
         debug_assert_eq!(unsafe { &*(block as *const SuperBlock) }.numa, meta.numa);
         if cfg!(debug_assertions) {
             debug_check_cache_aligned(addr, size, 8);
@@ -90,43 +94,26 @@ pub fn allocate(size: usize) -> Ptr {
     })
 }
 
-pub fn contains(ptr: Ptr) -> bool {
-    let addr = ptr as usize;
-    OBJECT_MAP.refresh(addr).map(|_| true).unwrap_or_else(|| OBJECT_MAP.contains(addr))
-
-}
-
-pub fn free(ptr: Ptr) -> bool {
+pub fn free(ptr: Ptr) {
     let current_numa = THREAD_META.with(|meta| meta.numa);
     PER_NODE_META[current_numa as usize]
         .pending_free
         .drop_out_all(Some(|(addr, _)| {
-            if let Some(superblock_addr) = OBJECT_MAP.get(addr) {
-                let superblock_ref = unsafe { &*(superblock_addr as *const SuperBlock) };
-                superblock_ref.dealloc(addr);
-            }
+            let superblock_ref = unsafe { &*object_superblock(addr) };
+            superblock_ref.dealloc(addr);
         }));
     let addr = ptr as usize;
-    if let Some(superblock_addr) = OBJECT_MAP.refresh(addr).or_else(|| OBJECT_MAP.get(addr)) {
-        let superblock_ref = unsafe { &*(superblock_addr as *const SuperBlock) };
-        if superblock_ref.numa == current_numa {
-            superblock_ref.dealloc(addr);
-        } else {
-            PER_NODE_META[superblock_ref.numa as usize].pending_free.push(addr);
-        }
-        return true;
+    let superblock_ref = unsafe { &*object_superblock(addr) };
+    if superblock_ref.numa == current_numa {
+        superblock_ref.dealloc(addr);
     } else {
-        return false;
+        PER_NODE_META[superblock_ref.numa as usize].pending_free.push(addr);
     }
 }
-pub fn size_of(ptr: Ptr) -> Option<usize> {
+pub fn size_of(ptr: Ptr) -> usize {
     let addr = ptr as usize;
-    OBJECT_MAP.refresh(addr)
-        .or_else(|| OBJECT_MAP.get(addr))
-        .map(|superblock_addr| {
-            let superblock_ref = unsafe { &*(superblock_addr as *const SuperBlock) };
-            superblock_ref.size as usize
-        })
+    let superblock_ref = unsafe { &*object_superblock(addr) };
+    superblock_ref.size as usize
 }
 
 impl ThreadMeta {
@@ -195,22 +182,29 @@ impl SuperBlock {
         let chunk_size = self_size_with_padding + *SUPERBLOCK_SIZE;
         // use bump_allocate function for it just allocate, do't record object address
         let addr = node_allocator.bump_allocate(chunk_size);
-        let data_base = addr + self_size_with_padding;
+        let data_base_addr = addr + self_size_with_padding;
         let ptr = addr as *mut Self;
+
+        debug_assert!((size as usize) < *MAXIMUM_SIZE);
 
         // ensure cache aligned
         debug_assert_eq!(align_padding(addr, CACHE_LINE_SIZE), 0);
-        debug_assert_eq!(align_padding(data_base, CACHE_LINE_SIZE), 0);
+        debug_assert_eq!(align_padding(data_base_addr, CACHE_LINE_SIZE), 0);
+
+        let bookmark_space =
+            min(CACHE_LINE_SIZE as u32, max(size, size_of_book_mark() as u32));
 
         unsafe {
             ptr::write(ptr, Self {
                 numa,
                 size,
-                data_base,
+                data_base_addr,
                 cpu,
                 reservation: AtomicU32::new(0),
                 used: AtomicU32::new(0),
                 free_list: lflist::WordList::new(),
+                bookmark_size: bookmark_space,
+                entry_size: bookmark_space + size,
             });
         }
 
@@ -224,12 +218,15 @@ impl SuperBlock {
             if pos_ext as usize >= *SUPERBLOCK_SIZE {
                 return None;
             } else {
-                let new_pos = pos + self.size;
+                let new_pos = pos + self.entry_size;
                 if self.reservation.compare_and_swap(pos, new_pos, Relaxed) == pos {
-                    // insert to per CPU cache to avoid synchronization
-                    let address = pos_ext + self.data_base;
-                    OBJECT_MAP.insert_to_cpu(address, self as *const Self as usize, self.numa, self.cpu);
-                    return Some(address);
+                    let pair_address = pos_ext + self.data_base_addr;
+                    let bookmark_padding = self.bookmark_size as usize - size_of_book_mark();
+                    let bookmark_address = pair_address + bookmark_padding;
+                    let bookmark_ptr = bookmark_address as *mut usize;
+                    let obj_address = bookmark_address + size_of_book_mark();
+                    unsafe { ptr::write(bookmark_ptr, self as *const Self as usize); }
+                    return Some(obj_address);
                 }
             }
         });
@@ -241,8 +238,7 @@ impl SuperBlock {
     }
 
     fn dealloc(&self, addr: usize) {
-        debug_assert!(addr >= self.data_base && addr < self.data_base + *SUPERBLOCK_SIZE);
-        debug_assert_eq!((addr - self.data_base) % self.size as usize, 0);
+        debug_assert!(addr >= self.data_base_addr && addr < self.data_base_addr + *SUPERBLOCK_SIZE);
         self.free_list.push(addr);
         self.used.fetch_sub(self.size, Relaxed);
     }
@@ -266,7 +262,7 @@ fn gen_numa_node_list() -> Vec<LazyWrapper<NodeMeta>> {
 fn size_classes(cpu: u16, numa: u16) -> TSizeClasses {
     let mut data: [MaybeUninit<SizeClass>; NUM_SIZE_CLASS] =
         unsafe { MaybeUninit::uninit().assume_init() };
-    let mut size = 2;
+    let mut size = MIN_SIZE as u32;
     let mut tier = 0;
     for elem in &mut data[..] {
         *elem = MaybeUninit::new(SizeClass::new(tier, size, cpu, numa));
@@ -290,6 +286,21 @@ fn min_power_of_2(mut n: usize) -> usize {
     return 1 << count;
 }
 
+unsafe fn object_superblock(obj_addr: usize) -> *const SuperBlock {
+    let bookmark_ptr = (obj_addr - size_of_book_mark()) as *const usize;
+    let addr = ptr::read(bookmark_ptr);
+    let super_block = addr as *const SuperBlock;
+    debug_assert!(((&*super_block).size as usize) < *MAXIMUM_SIZE);
+    debug_assert!(((&*super_block).size as usize) >= MIN_SIZE);
+    super_block
+}
+
+
+#[inline(always)]
+fn size_of_book_mark() -> usize {
+    mem::size_of::<usize>()
+}
+
 #[inline]
 fn maximum_size() -> usize {
     2 << (NUM_SIZE_CLASS - 1)
@@ -308,7 +319,7 @@ fn gen_core_meta() -> Vec<LazyWrapper<CoreMeta>> {
 fn debug_check_cache_aligned(addr: usize, size: usize, align: usize) {
     if size >= align {
         // ensure all address are cache aligned
-        debug_assert_eq!(align_padding(addr, align), 0);
+        debug_assert_eq!(align_padding(addr, align), 0, "size: {}, align: {}", size, align);
     }
 }
 

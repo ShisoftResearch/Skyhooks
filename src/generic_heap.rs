@@ -29,10 +29,8 @@ pub unsafe fn malloc(size: Size) -> Ptr {
 
 #[cfg(not(feature = "bump_heap_only"))]
 pub unsafe fn free(ptr: Ptr) {
-    if !small_heap::free(ptr) {
-    } else if !large_heap::free(ptr) {
-    } else {
-        warn!("Cannot find object to free at {:x?}", ptr as usize);
+    if !large_heap::free(ptr) {
+        small_heap::free(ptr)
     }
 }
 
@@ -49,13 +47,10 @@ pub unsafe fn realloc(ptr: Ptr, size: Size) -> Ptr {
         free(ptr);
         return NULL_PTR;
     }
-    let old_size = if let Some(size) = small_heap::size_of(ptr) {
-        size
-    } else if let Some(_) = large_heap::size_of(ptr) {
+    let old_size = if let Some(_) = large_heap::size_of(ptr) {
         size
     } else {
-        warn!("Cannot determinate old object");
-        return NULL_PTR;
+        small_heap::size_of(ptr)
     };
     if old_size >= size {
         info!("old size is larger than requesting size, untouched");
