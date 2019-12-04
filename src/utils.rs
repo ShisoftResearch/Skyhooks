@@ -32,6 +32,8 @@ lazy_static! {
     pub static ref SYS_TOTAL_MEM: usize = total_memory();
 }
 
+
+// Address hasher for cache locality
 pub struct AddressHasher {
     num: u64
 }
@@ -48,7 +50,7 @@ impl Hasher for AddressHasher {
 
     #[inline(always)]
     fn write_usize(&mut self, i: usize) {
-        self.num = (i >> i.trailing_zeros()) as u64
+        self.num = (i >> 4) as u64
     }
 }
 
