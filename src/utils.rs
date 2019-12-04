@@ -14,6 +14,7 @@ use std::collections::hash_map::DefaultHasher;
 use seahash::SeaHasher;
 use lazy_init::Lazy;
 use std::ops::Deref;
+use std::cmp::min;
 
 pub const CACHE_LINE_SIZE: usize = 64;
 pub type CacheLineType = (usize, usize, usize, usize, usize, usize, usize, usize);
@@ -50,7 +51,8 @@ impl Hasher for AddressHasher {
 
     #[inline(always)]
     fn write_usize(&mut self, i: usize) {
-        self.num = (i >> 4) as u64
+        let eliminate_zeros = min(i.trailing_zeros(), 4);
+        self.num = (i >> eliminate_zeros) as u64
     }
 }
 
