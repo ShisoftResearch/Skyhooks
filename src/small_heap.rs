@@ -29,6 +29,8 @@ lazy_static! {
     static ref PER_NODE_META: Vec<LazyWrapper<NodeMeta>> = gen_numa_node_list();
     static ref PER_CPU_META: Vec<LazyWrapper<CoreMeta>> = gen_core_meta();
     static ref SUPERBLOCK_SIZE: usize = *MAXIMUM_SIZE << 2;
+    static ref OBJECT_MAP: lfmap::WordMap =
+        lfmap::WordMap::with_capacity(upper_power_of_2(*NUM_CPU as usize * CACHE_LINE_SIZE));
     pub static ref MAXIMUM_SIZE: usize = maximum_size();
 }
 
@@ -53,7 +55,6 @@ struct NodeMeta {
     size_class_list: TSizeClasses,
     bump_allocator: bump_heap::AllocatorInstance<BumpAllocator>,
     pending_free: lflist::WordList<BumpAllocator>,
-    objects: lfmap::WordMap<BumpAllocator>,
 }
 
 struct SizeClass {
@@ -93,22 +94,21 @@ pub fn allocate(size: usize) -> Ptr {
 
 pub fn free(ptr: Ptr) -> bool {
     let current_numa = THREAD_META.with(|meta| meta.numa);
-    let numa_meta = &PER_NODE_META[current_numa as usize];
-    numa_meta.pending_free.drop_out_all(Some(|(addr, _)| {
-        if let Some(superblock_addr) = numa_meta.objects.get(addr) {
-            let superblock_ref = unsafe { &*(superblock_addr as *const SuperBlock) };
-            superblock_ref.dealloc(addr);
-        }
-    }));
+    PER_NODE_META[current_numa as usize]
+        .pending_free
+        .drop_out_all(Some(|(addr, _)| {
+            if let Some(superblock_addr) = OBJECT_MAP.get(addr) {
+                let superblock_ref = unsafe { &*(superblock_addr as *const SuperBlock) };
+                superblock_ref.dealloc(addr);
+            }
+        }));
     let addr = ptr as usize;
-    if let Some(superblock_addr) = get_from_objects(current_numa, addr) {
+    if let Some(superblock_addr) = OBJECT_MAP.get(addr) {
         let superblock_ref = unsafe { &*(superblock_addr as *const SuperBlock) };
         if superblock_ref.numa == current_numa {
             superblock_ref.dealloc(addr);
         } else {
-            PER_NODE_META[superblock_ref.numa as usize]
-                .pending_free
-                .push(addr);
+            PER_NODE_META[superblock_ref.numa as usize].pending_free.push(addr);
         }
         return true;
     } else {
@@ -117,11 +117,11 @@ pub fn free(ptr: Ptr) -> bool {
 }
 pub fn size_of(ptr: Ptr) -> Option<usize> {
     let addr = ptr as usize;
-    let current_numa = THREAD_META.with(|meta| meta.numa);
-    get_from_objects(current_numa, addr).map(|superblock_addr| {
-        let superblock_ref = unsafe { &*(superblock_addr as *const SuperBlock) };
-        superblock_ref.size as usize
-    })
+    OBJECT_MAP.get(addr)
+        .map(|superblock_addr| {
+            let superblock_ref = unsafe { &*(superblock_addr as *const SuperBlock) };
+            superblock_ref.size as usize
+        })
 }
 
 impl ThreadMeta {
@@ -224,9 +224,7 @@ impl SuperBlock {
                 if self.reservation.compare_and_swap(pos, new_pos, Relaxed) == pos {
                     // insert to per CPU cache to avoid synchronization
                     let address = pos_ext + self.data_base;
-                    PER_NODE_META[self.numa as usize]
-                        .objects
-                        .insert(address, self as *const Self as usize);
+                    OBJECT_MAP.insert(address, self as *const Self as usize);
                     return Some(address);
                 }
             }
@@ -254,7 +252,6 @@ fn gen_numa_node_list() -> Vec<LazyWrapper<NodeMeta>> {
             size_class_list: size_classes(0, i),
             bump_allocator: bump_heap::AllocatorInstance::new(),
             pending_free: lflist::WordList::new(),
-            objects: lfmap::WordMap::with_capacity(*SYS_PAGE_SIZE),
         })));
     }
     return nodes;
@@ -307,24 +304,6 @@ fn debug_check_cache_aligned(addr: usize, size: usize, align: usize) {
         // ensure all address are cache aligned
         debug_assert_eq!(align_padding(addr, align), 0);
     }
-}
-
-fn get_from_objects(current_numa: u16, addr: usize) -> Option<usize> {
-    let current_numa_ext = current_numa as usize;
-    if let Some(addr) = PER_NODE_META[current_numa_ext].objects.get(addr) {
-        return Some(addr);
-    } else {
-        for (numa_id, numa_meta) in PER_NODE_META
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| i != &current_numa_ext)
-        {
-            if let Some(addr) = PER_NODE_META[numa_id].objects.get(addr) {
-                return Some(addr);
-            }
-        }
-    }
-    return None;
 }
 
 #[cfg(test)]
