@@ -220,8 +220,8 @@ impl<T: Default + Copy, A: Alloc + Default> List<T, A> {
                         &mut 0,
                     );
                     debug_assert_eq!(dropped_next.unwrap_or(null_mut()), next_buffer_ptr);
-                    // don't need to unref here for drop out did this for us
-                }  else {
+                // don't need to unref here for drop out did this for us
+                } else {
                     backoff.spin();
                 }
                 continue;
@@ -390,15 +390,18 @@ impl<T: Default, A: Alloc + Default> BufferMeta<T, A> {
         let head_page_addr = head_page as usize;
         let slots_start = head_page_addr + meta_size;
         unsafe {
-            ptr::write(head_page, Self {
-                head: AtomicUsize::new(0),
-                next: AtomicPtr::new(null_mut()),
-                refs: AtomicUsize::new(1),
-                upper_bound: head_page_addr + total_size,
-                lower_bound: slots_start,
-                tuple_size,
-                total_size,
-            });
+            ptr::write(
+                head_page,
+                Self {
+                    head: AtomicUsize::new(0),
+                    next: AtomicPtr::new(null_mut()),
+                    refs: AtomicUsize::new(1),
+                    upper_bound: head_page_addr + total_size,
+                    lower_bound: slots_start,
+                    tuple_size,
+                    total_size,
+                },
+            );
         }
         head_page
     }
@@ -751,9 +754,7 @@ impl<T: Default + Copy> ExchangeSlot<T> {
 
     fn store_state_data(&self, data: Option<ExchangeData<T>>) {
         let mut data_content_ptr = self.data.get();
-        unsafe {
-            ptr::write(data_content_ptr, data)
-        }
+        unsafe { ptr::write(data_content_ptr, data) }
         fence(SeqCst);
         self.data_state.store(self.state.load(Relaxed), Relaxed);
     }

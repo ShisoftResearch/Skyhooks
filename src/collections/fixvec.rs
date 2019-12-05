@@ -23,7 +23,9 @@ impl<T, A: Alloc + Default> FixedVec<T, A> {
             shadow: PhantomData,
         }
     }
-    pub fn capacity(&self) -> usize { self.capacity }
+    pub fn capacity(&self) -> usize {
+        self.capacity
+    }
     fn object_ptr(&self, index: usize) -> usize {
         self.ptr as usize + index * mem::size_of::<T>()
     }
@@ -55,7 +57,7 @@ fn total_size<T>(cap: usize) -> usize {
 unsafe impl<T> Send for FixedVec<T> {}
 unsafe impl<T> Sync for FixedVec<T> {}
 
-impl <T, A: Alloc + Default> Drop for FixedVec<T, A> {
+impl<T, A: Alloc + Default> Drop for FixedVec<T, A> {
     fn drop(&mut self) {
         if self.ptr == null_mut() {
             return;

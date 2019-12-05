@@ -1,16 +1,16 @@
 // eventual-consistent map based on lfmap and lflist from Shisoft
+use crate::bump_heap::BumpAllocator;
 use crate::collections::lflist;
 use crate::utils::*;
 use core::cell::Cell;
 use lfmap::{Map, WordMap};
+use std::alloc::Global;
+use std::cmp::min;
 use std::marker::PhantomData;
 use std::mem;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::Arc;
-use std::cmp::min;
-use std::alloc::Global;
-use crate::bump_heap::BumpAllocator;
 
 const MAX_BINS: usize = 32;
 const BIN_INDEX_MASK: usize = MAX_BINS - 1;
@@ -22,12 +22,12 @@ pub struct EvMap {
 }
 
 struct EvBin {
-    list: lflist::ObjectList<(usize, usize)>
+    list: lflist::ObjectList<(usize, usize)>,
 }
 
 struct NumaBin {
     bins: Vec<LazyWrapper<EvBin>>,
-    cpu_mask: u16
+    cpu_mask: u16,
 }
 
 impl EvMap {
@@ -46,7 +46,7 @@ impl EvMap {
                 }
                 NumaBin {
                     bins: cpu_source,
-                    cpu_mask: cpu_slots as u16 - 1
+                    cpu_mask: cpu_slots as u16 - 1,
                 }
             })));
         }
@@ -59,7 +59,8 @@ impl EvMap {
     pub fn refresh(&self, lookup: usize) -> Option<usize> {
         // get all items from producers and insert into the local map
         let mut lookup_res = 0;
-        if self.source
+        if self
+            .source
             .iter()
             .map(|c| c.bins.iter())
             .flatten()
@@ -108,7 +109,7 @@ impl EvMap {
 impl EvBin {
     pub fn new() -> Self {
         Self {
-            list: lflist::ObjectList::with_capacity(8) // fit into 2 cache lines
+            list: lflist::ObjectList::with_capacity(8), // fit into 2 cache lines
         }
     }
 

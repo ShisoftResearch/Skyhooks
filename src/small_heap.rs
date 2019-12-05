@@ -4,20 +4,20 @@ use crate::collections::lflist::WordList;
 use crate::collections::{evmap, lflist};
 use crate::generic_heap::{log_2_of, size_class_index_from_size, ObjectMeta, NUM_SIZE_CLASS};
 use crate::utils::*;
-use core::ptr;
 use core::mem;
 use core::mem::MaybeUninit;
-use core::sync::atomic::{AtomicUsize, AtomicU32};
+use core::ptr;
+use core::sync::atomic::{AtomicU32, AtomicUsize};
 use crossbeam_queue::SegQueue;
+use lazy_init::Lazy;
 use lfmap::{Map, WordMap};
 use std::alloc::GlobalAlloc;
 use std::cell::{Cell, RefCell};
 use std::clone::Clone;
+use std::ops::Deref;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;
 use std::thread;
-use lazy_init::Lazy;
-use std::ops::Deref;
 
 type TSizeClasses = [SizeClass; NUM_SIZE_CLASS];
 
@@ -31,7 +31,6 @@ lazy_static! {
     static ref SUPERBLOCK_SIZE: usize = *MAXIMUM_SIZE << 2;
     pub static ref MAXIMUM_SIZE: usize = maximum_size();
 }
-
 
 #[cfg_attr(target_arch = "x86_64", repr(align(128)))]
 #[cfg_attr(not(target_arch = "x86_64"), repr(align(64)))]
@@ -55,7 +54,7 @@ struct NodeMeta {
     size_class_list: TSizeClasses,
     bump_allocator: bump_heap::AllocatorInstance<BumpAllocator>,
     pending_free: lflist::WordList<BumpAllocator>,
-    objects: lfmap::WordMap<BumpAllocator>
+    objects: lfmap::WordMap<BumpAllocator>,
 }
 
 struct SizeClass {
@@ -96,21 +95,21 @@ pub fn allocate(size: usize) -> Ptr {
 pub fn free(ptr: Ptr) -> bool {
     let current_numa = THREAD_META.with(|meta| meta.numa);
     let numa_meta = &PER_NODE_META[current_numa as usize];
-    numa_meta
-        .pending_free
-        .drop_out_all(Some(|(addr, _)| {
-            if let Some(superblock_addr) = numa_meta.objects.get(addr) {
-                let superblock_ref = unsafe { &*(superblock_addr as *const SuperBlock) };
-                superblock_ref.dealloc(addr);
-            }
-        }));
+    numa_meta.pending_free.drop_out_all(Some(|(addr, _)| {
+        if let Some(superblock_addr) = numa_meta.objects.get(addr) {
+            let superblock_ref = unsafe { &*(superblock_addr as *const SuperBlock) };
+            superblock_ref.dealloc(addr);
+        }
+    }));
     let addr = ptr as usize;
     if let Some(superblock_addr) = get_from_objects(current_numa, addr) {
         let superblock_ref = unsafe { &*(superblock_addr as *const SuperBlock) };
         if superblock_ref.numa == current_numa {
             superblock_ref.dealloc(addr);
         } else {
-            PER_NODE_META[superblock_ref.numa as usize].pending_free.push(addr);
+            PER_NODE_META[superblock_ref.numa as usize]
+                .pending_free
+                .push(addr);
         }
         return true;
     } else {
@@ -120,11 +119,10 @@ pub fn free(ptr: Ptr) -> bool {
 pub fn size_of(ptr: Ptr) -> Option<usize> {
     let addr = ptr as usize;
     let current_numa = THREAD_META.with(|meta| meta.numa);
-    get_from_objects(current_numa, addr)
-        .map(|superblock_addr| {
-            let superblock_ref = unsafe { &*(superblock_addr as *const SuperBlock) };
-            superblock_ref.size as usize
-        })
+    get_from_objects(current_numa, addr).map(|superblock_addr| {
+        let superblock_ref = unsafe { &*(superblock_addr as *const SuperBlock) };
+        superblock_ref.size as usize
+    })
 }
 
 impl ThreadMeta {
@@ -201,15 +199,18 @@ impl SuperBlock {
         debug_assert_eq!(align_padding(data_base, CACHE_LINE_SIZE), 0);
 
         unsafe {
-            ptr::write(ptr, Self {
-                numa,
-                size,
-                data_base,
-                cpu,
-                reservation: AtomicU32::new(0),
-                used: AtomicU32::new(0),
-                free_list: lflist::WordList::new(),
-            });
+            ptr::write(
+                ptr,
+                Self {
+                    numa,
+                    size,
+                    data_base,
+                    cpu,
+                    reservation: AtomicU32::new(0),
+                    used: AtomicU32::new(0),
+                    free_list: lflist::WordList::new(),
+                },
+            );
         }
 
         return ptr;
@@ -226,7 +227,9 @@ impl SuperBlock {
                 if self.reservation.compare_and_swap(pos, new_pos, Relaxed) == pos {
                     // insert to per CPU cache to avoid synchronization
                     let address = pos_ext + self.data_base;
-                    PER_NODE_META[self.numa as usize].objects.insert(address, self as *const Self as usize);
+                    PER_NODE_META[self.numa as usize]
+                        .objects
+                        .insert(address, self as *const Self as usize);
                     return Some(address);
                 }
             }
@@ -250,13 +253,11 @@ fn gen_numa_node_list() -> Vec<LazyWrapper<NodeMeta>> {
     let num_nodes = *NUM_NUMA_NODES;
     let mut nodes = Vec::with_capacity(num_nodes as usize);
     for i in 0..num_nodes {
-        nodes.push(LazyWrapper::new(Box::new(move || {
-            NodeMeta {
-                size_class_list: size_classes(0, i),
-                bump_allocator: bump_heap::AllocatorInstance::new(),
-                pending_free: lflist::WordList::new(),
-                objects: lfmap::WordMap::with_capacity(*SYS_PAGE_SIZE)
-            }
+        nodes.push(LazyWrapper::new(Box::new(move || NodeMeta {
+            size_class_list: size_classes(0, i),
+            bump_allocator: bump_heap::AllocatorInstance::new(),
+            pending_free: lflist::WordList::new(),
+            objects: lfmap::WordMap::with_capacity(*SYS_PAGE_SIZE),
         })));
     }
     return nodes;
@@ -296,11 +297,11 @@ fn maximum_size() -> usize {
 
 fn gen_core_meta() -> Vec<LazyWrapper<CoreMeta>> {
     (0..*NUM_CPU)
-        .map(|cpu_id| LazyWrapper::new(Box::new(move || {
-            CoreMeta {
+        .map(|cpu_id| {
+            LazyWrapper::new(Box::new(move || CoreMeta {
                 size_class_list: size_classes(cpu_id, SYS_CPU_NODE[&cpu_id]),
-            }
-        })))
+            }))
+        })
         .collect()
 }
 
@@ -316,7 +317,11 @@ fn get_from_objects(current_numa: u16, addr: usize) -> Option<usize> {
     if let Some(addr) = PER_NODE_META[current_numa_ext].objects.get(addr) {
         return Some(addr);
     } else {
-        for (numa_id, numa_meta) in PER_NODE_META.iter().enumerate().filter(|(i, _)| i != &current_numa_ext) {
+        for (numa_id, numa_meta) in PER_NODE_META
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| i != &current_numa_ext)
+        {
             if let Some(addr) = PER_NODE_META[numa_id].objects.get(addr) {
                 return Some(addr);
             }
@@ -329,8 +334,8 @@ fn get_from_objects(current_numa: u16, addr: usize) -> Option<usize> {
 mod test {
     use crate::api::NullocAllocator;
     use crate::small_heap::{allocate, free};
-    use lfmap::Map;
     use crate::utils::AddressHasher;
+    use lfmap::Map;
 
     #[test]
     pub fn general() {

@@ -14,10 +14,10 @@ use core::alloc::{Alloc, AllocErr, GlobalAlloc, Layout};
 use core::sync::atomic::Ordering::Relaxed;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use core::{mem, ptr};
+use crossbeam::utils::Backoff;
 use lfmap::Map;
 use libc::*;
 use std::mem::MaybeUninit;
-use crossbeam::utils::Backoff;
 
 const BUMP_SIZE_CLASS: usize = NUM_SIZE_CLASS << 1;
 
@@ -54,7 +54,7 @@ fn dealloc_address_space(address: Ptr) {
     munmap_memory(address, HEAP_VIRT_SIZE);
 }
 
-impl <A: Alloc + Default> AllocatorInstance <A> {
+impl<A: Alloc + Default> AllocatorInstance<A> {
     pub fn new() -> Self {
         let addr = allocate_address_space();
         Self {
@@ -78,7 +78,7 @@ impl <A: Alloc + Default> AllocatorInstance <A> {
                 // may overflow the address space, need to allocate another address space
                 // Fetch the old base address for reference in CAS
                 self.swap_memory(base);
-                // Anyhow, skip follow statements and retry
+            // Anyhow, skip follow statements and retry
             } else if self
                 .tail
                 .compare_and_swap(current_tail, new_tail, Ordering::SeqCst)
@@ -127,7 +127,7 @@ impl <A: Alloc + Default> AllocatorInstance <A> {
     }
 }
 
-unsafe impl <A: Alloc + Default> GlobalAlloc for AllocatorInstance<A> {
+unsafe impl<A: Alloc + Default> GlobalAlloc for AllocatorInstance<A> {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let align = layout.align();
         let (actual_size, size_class_index) = self.size_of_object(&layout);
@@ -170,7 +170,7 @@ unsafe impl Alloc for BumpAllocator {
     }
 }
 
-impl <A: Alloc + Default> SizeClass <A> {
+impl<A: Alloc + Default> SizeClass<A> {
     pub fn new(size: usize) -> Self {
         Self {
             size,
@@ -266,10 +266,10 @@ pub unsafe fn realloc(ptr: Ptr, size: Size) -> Ptr {
 #[cfg(test)]
 mod test {
     use crate::bump_heap::BumpAllocator;
+    use crate::utils::AddressHasher;
     use crate::Ptr;
     use lfmap::Map;
     use std::alloc::{GlobalAlloc, Layout};
-    use crate::utils::AddressHasher;
 
     #[test]
     pub fn generic() {

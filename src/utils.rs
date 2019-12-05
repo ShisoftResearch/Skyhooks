@@ -4,21 +4,20 @@ use alloc::alloc::Global;
 use core::alloc::{Alloc, GlobalAlloc, Layout};
 use core::mem;
 use core::ptr::NonNull;
+use lazy_init::Lazy;
+use lfmap::hash;
 use libc::{sysconf, _SC_PAGESIZE};
 use regex::Regex;
+use seahash::SeaHasher;
+use std::cmp::min;
+use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::fs::read_dir;
 use std::hash::Hasher;
-use lfmap::hash;
-use std::collections::hash_map::DefaultHasher;
-use seahash::SeaHasher;
-use lazy_init::Lazy;
 use std::ops::Deref;
-use std::cmp::min;
 
 pub const CACHE_LINE_SIZE: usize = 64;
 pub type CacheLineType = (usize, usize, usize, usize, usize, usize, usize, usize);
-
 
 const HASH_MAGIC_NUMBER_1: usize = 67280421310721;
 const HASH_MAGIC_NUMBER_2: usize = 123456789;
@@ -33,10 +32,9 @@ lazy_static! {
     pub static ref SYS_TOTAL_MEM: usize = total_memory();
 }
 
-
 // Address hasher for cache locality
 pub struct AddressHasher {
-    num: u64
+    num: u64,
 }
 
 impl Hasher for AddressHasher {
@@ -72,7 +70,8 @@ pub fn current_thread_id() -> u32 {
 }
 
 pub fn cpu_topology() -> HashMap<u16, u16> {
-    let cpus = SYS_NODE_CPUS.iter()
+    let cpus = SYS_NODE_CPUS
+        .iter()
         .map(|(node, cpus)| {
             let node = *node;
             let cpus = cpus.clone();
@@ -124,7 +123,9 @@ pub fn node_topology() -> HashMap<u16, Vec<u16>> {
                 (node_num, cpus)
             })
             .collect(),
-        Err(_) => vec![(0, (0..num_cpus::get() as u16).map(|n| n).collect())].into_iter().collect(),
+        Err(_) => vec![(0, (0..num_cpus::get() as u16).map(|n| n).collect())]
+            .into_iter()
+            .collect(),
     }
 }
 
@@ -183,7 +184,11 @@ pub fn set_node_affinity(node_id: u16, thread_id: u32) {
             .iter()
             .map(|cpu| *cpu)
             .for_each(|cpu| libc::CPU_SET(cpu as usize, &mut set));
-        libc::pthread_setaffinity_np(thread_id as u64, std::mem::size_of::<libc::cpu_set_t>(), &set);
+        libc::pthread_setaffinity_np(
+            thread_id as u64,
+            std::mem::size_of::<libc::cpu_set_t>(),
+            &set,
+        );
     }
 }
 
@@ -239,45 +244,43 @@ pub fn upper_power_of_2(mut v: usize) -> usize {
 #[repr(align(4096))]
 pub struct LazyWrapper<T: Sync> {
     inner: Lazy<T>,
-    init: Box<dyn Fn() -> T>
+    init: Box<dyn Fn() -> T>,
 }
 
-impl <T: Sync> LazyWrapper<T> {
+impl<T: Sync> LazyWrapper<T> {
     pub fn new(create: Box<dyn Fn() -> T>) -> Self {
         Self {
             inner: Lazy::new(),
-            init: create
+            init: create,
         }
     }
 }
 
-impl <T: Sync> Deref for LazyWrapper<T> {
+impl<T: Sync> Deref for LazyWrapper<T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        self.inner.get_or_create(|| {
-            (self.init)()
-        })
+        self.inner.get_or_create(|| (self.init)())
     }
 }
 
-unsafe impl <T: Sync> Sync for LazyWrapper<T> {}
+unsafe impl<T: Sync> Sync for LazyWrapper<T> {}
 
 #[cfg(test)]
 mod test {
     use crate::api::NullocAllocator;
     use crate::collections::lflist::WordList;
-    use lfmap::{Map, WordMap, PassthroughHasher};
+    use crate::utils::AddressHasher;
+    use lfmap::{Map, PassthroughHasher, WordMap};
     use rand::{thread_rng, Rng, SeedableRng};
     use rand_xorshift::XorShiftRng;
     use rand_xoshiro::Xoroshiro64StarStar;
-    use std::alloc::{GlobalAlloc, Layout, System, Global};
+    use std::alloc::{Global, GlobalAlloc, Layout, System};
     use std::collections::HashMap;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering::Relaxed;
-    use test::Bencher;
     use std::time::Instant;
-    use crate::utils::AddressHasher;
+    use test::Bencher;
 
     #[test]
     fn numa_nodes() {

@@ -28,8 +28,8 @@ impl Default for MmapAllocator {
 mod test {
     use crate::bump_heap::BumpAllocator;
     use crate::mmap_heap::MmapAllocator;
-    use lfmap::Map;
     use crate::utils::AddressHasher;
+    use lfmap::Map;
 
     #[test]
     pub fn general() {
