@@ -47,7 +47,6 @@ struct SuperBlock {
 struct ThreadMeta {
     numa: u16,
     cpu: u16,
-    tid: u32,
 }
 
 struct NodeMeta {
@@ -127,14 +126,12 @@ pub fn size_of(ptr: Ptr) -> Option<usize> {
 
 impl ThreadMeta {
     pub fn new() -> Self {
-        let tid = current_thread_id();
         let cpu_id = current_cpu();
         let numa_id = numa_from_cpu_id(cpu_id);
-        // set_node_affinity(numa_id, tid as u64);
+        // set_node_affinity(numa_id, tid);
         Self {
             numa: numa_id,
             cpu: cpu_id,
-            tid,
         }
     }
 }

@@ -65,8 +65,8 @@ pub fn align_padding(len: usize, align: usize) -> usize {
     len_rounded_up.wrapping_sub(len)
 }
 
-pub fn current_thread_id() -> u32 {
-    unsafe { libc::pthread_self() as u32 }
+pub fn current_thread_id() -> usize {
+    unsafe { libc::pthread_self() as usize }
 }
 
 pub fn cpu_topology() -> HashMap<u16, u16> {
@@ -146,8 +146,8 @@ pub fn current_cpu() -> u16 {
     unsafe { libc::sched_getcpu() as u16 }
 }
 
-pub fn cpu_id_from_tid(tid: u32) -> u16 {
-    (hash::<SeaHasher>(tid as usize) % (*NUM_CPU) as usize) as u16
+pub fn cpu_id_from_tid(tid: usize) -> u16 {
+    (hash::<SeaHasher>(tid) % (*NUM_CPU) as usize) as u16
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -177,13 +177,16 @@ pub fn current_numa() -> u16 {
 }
 
 #[cfg(target_os = "linux")]
-pub fn set_node_affinity(node_id: u16, thread_id: u32) {
+pub fn set_node_affinity(node_id: u16, thread_id: usize) {
     unsafe {
         let mut set: libc::cpu_set_t = std::mem::zeroed();
-        SYS_NODE_CPUS[&node_id]
+        let cpus = &SYS_NODE_CPUS[&node_id];
+        cpus
             .iter()
             .map(|cpu| *cpu)
-            .for_each(|cpu| libc::CPU_SET(cpu as usize, &mut set));
+            .for_each(|cpu| {
+                libc::CPU_SET(cpu as usize, &mut set)
+            });
         libc::pthread_setaffinity_np(
             thread_id as u64,
             std::mem::size_of::<libc::cpu_set_t>(),
