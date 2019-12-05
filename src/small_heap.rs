@@ -93,24 +93,6 @@ pub fn allocate(size: usize) -> Ptr {
     })
 }
 
-pub fn contains(ptr: Ptr) -> bool {
-    let addr = ptr as usize;
-    let current_numa = THREAD_META.with(|meta| meta.numa);
-    let numa_meta = &PER_NODE_META[current_numa as usize];
-    if numa_meta.objects.contains(addr) {
-        return true;
-    } else {
-        for numa_id in 0..PER_NODE_META.len() as u16 {
-            if numa_id != current_numa {
-                if PER_NODE_META[numa_id as usize].objects.contains(addr) {
-                    return true;
-                }
-            }
-        }
-    }
-    return false;
-} 
-
 pub fn free(ptr: Ptr) -> bool {
     let current_numa = THREAD_META.with(|meta| meta.numa);
     let numa_meta = &PER_NODE_META[current_numa as usize];
@@ -330,14 +312,13 @@ fn debug_check_cache_aligned(addr: usize, size: usize, align: usize) {
 }
 
 fn get_from_objects(current_numa: u16, addr: usize) -> Option<usize> {
-    if let Some(addr) = PER_NODE_META[current_numa as usize].objects.get(addr) {
+    let current_numa_ext = current_numa as usize;
+    if let Some(addr) = PER_NODE_META[current_numa_ext].objects.get(addr) {
         return Some(addr);
     } else {
-        for numa_id in 0..PER_NODE_META.len() as u16 {
-            if numa_id != current_numa {
-                if let Some(addr) = PER_NODE_META[numa_id as usize].objects.get(addr) {
-                    return Some(addr);
-                }
+        for (numa_id, numa_meta) in PER_NODE_META.iter().enumerate().filter(|(i, _)| i != &current_numa_ext) {
+            if let Some(addr) = PER_NODE_META[numa_id].objects.get(addr) {
+                return Some(addr);
             }
         }
     }
