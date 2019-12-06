@@ -136,7 +136,7 @@ unsafe impl<A: Alloc + Default> GlobalAlloc for AllocatorInstance<A> {
             .get(size_class_index)
             .and_then(|sc| sc.free_list.pop())
             .unwrap_or_else(|| {
-                let size_with_bookmark = actual_size + bookmark_size;
+                let size_with_bookmark = actual_size + (bookmark_size << 1);
                 let addr = self.bump_allocate(size_with_bookmark);
                 addr
             }) + bookmark_size;
@@ -145,7 +145,7 @@ unsafe impl<A: Alloc + Default> GlobalAlloc for AllocatorInstance<A> {
         unsafe {
             debug_assert_eq!(actual_size & BOOKMARK_TYPE_FLAG_MASK, 0);
             ptr::write((final_addr - mem::size_of::<usize>()) as *mut usize, actual_size + 1);
-            ptr::write((final_addr - (mem::size_of::<usize>() << 1)) as *mut usize, origin_addr);
+            ptr::write((final_addr - bookmark_size) as *mut usize, origin_addr);
         }
         debug_validate(final_addr as Ptr, actual_size);
         return final_addr as *mut u8;
@@ -155,8 +155,8 @@ unsafe impl<A: Alloc + Default> GlobalAlloc for AllocatorInstance<A> {
         let (actual_size, size_class_index) = self.size_of_object(&layout);
         let addr = ptr as usize;
         let record_size = ptr::read((addr - mem::size_of::<usize>()) as *const usize) - 1;
-        debug_assert_eq!(record_size, actual_size);
         let actual_addr = ptr::read((addr - (mem::size_of::<usize>() << 1)) as *const usize);
+        debug_assert_eq!(record_size, actual_size);
         debug_assert!(actual_addr <= addr);
         debug_assert!(actual_addr > addr - maximum_free_list_covered_size());
         let size_class_index = size_class_index_from_size(actual_size);
