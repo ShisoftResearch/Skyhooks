@@ -164,7 +164,7 @@ unsafe impl<A: Alloc + Default> GlobalAlloc for AllocatorInstance<A> {
         let origin_ptr = (size_ptr as usize - mem::size_of::<usize>()) as *mut usize;
         let record_size = ptr::read(size_ptr) - 1;
         let origin_addr = ptr::read(origin_ptr);
-        if origin_addr < addr
+        if origin_addr > addr
             || origin_addr > addr + maximum_free_list_covered_size()
             || record_size != actual_size
         {

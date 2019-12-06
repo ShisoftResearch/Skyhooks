@@ -252,7 +252,11 @@ impl SuperBlock {
     }
 
     fn dealloc(&self, addr: usize) {
-        if addr < self.data_base || addr > self.data_base + *SUPERBLOCK_SIZE {
+        if addr < self.data_base
+            || addr > self.data_base + *SUPERBLOCK_SIZE
+            || self.size < 2
+            || self.size as usize > *MAXIMUM_SIZE
+        {
             return;
         }
         self.free_list.push(addr);
