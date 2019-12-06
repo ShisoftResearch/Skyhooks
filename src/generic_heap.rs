@@ -32,7 +32,7 @@ pub unsafe fn free(ptr: Ptr) {
     if !small_heap::free(ptr) {
     } else if !large_heap::free(ptr) {
     } else {
-        warn!("Cannot find object to free at {:x?}", ptr as usize);
+        panic!("Cannot find object to free at {:x?}", ptr as usize);
     }
 }
 
@@ -54,7 +54,7 @@ pub unsafe fn realloc(ptr: Ptr, size: Size) -> Ptr {
     } else if let Some(_) = large_heap::size_of(ptr) {
         size
     } else {
-        warn!("Cannot determinate old object");
+        panic!("Cannot determinate old object");
         return NULL_PTR;
     };
     if old_size >= size {

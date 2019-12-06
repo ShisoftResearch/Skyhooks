@@ -152,7 +152,7 @@ pub fn cpu_id_from_tid(tid: usize) -> u16 {
 
 #[cfg(not(target_os = "linux"))]
 pub fn current_cpu() -> u16 {
-    (current_thread_id() % (*NUM_CPU) as u32) as u16
+    (current_thread_id() % (*NUM_CPU) as usize) as u16
 }
 
 #[cfg(target_os = "linux")]
