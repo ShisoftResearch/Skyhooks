@@ -36,20 +36,20 @@ pub unsafe fn nu_free(ptr: Ptr) {
     if ptr == null_mut() {
         return;
     }
-//    INNER_CALL.with(|is_inner| {
-//        if !is_inner.get() {
-//            is_inner.set(true);
-//            generic_heap::free(ptr);
-//            is_inner.set(false);
-//        } else {
-//            let (bookmark, is_bump) = object_bookmark(ptr as usize);
-//            if is_bump {
-//                bump_heap::free(ptr, bookmark);
-//            } else {
-//                warn!("Inner free non bump");
-//            }
-//        }
-//    })
+    INNER_CALL.with(|is_inner| {
+        if !is_inner.get() {
+            is_inner.set(true);
+            generic_heap::free(ptr);
+            is_inner.set(false);
+        } else {
+            let (bookmark, is_bump) = object_bookmark(ptr as usize);
+            if is_bump {
+                bump_heap::free(ptr, bookmark);
+            } else {
+                warn!("Inner free non bump");
+            }
+        }
+    })
 }
 
 pub unsafe fn nu_calloc(nmemb: Size, size: Size) -> Ptr {

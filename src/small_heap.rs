@@ -101,6 +101,10 @@ pub fn free(ptr: Ptr, bookmark: usize) {
         superblock_ref.dealloc(addr);
     }));
     let addr = ptr as usize;
+    if bookmark > addr + *SUPERBLOCK_SIZE || bookmark < addr - *SUPERBLOCK_SIZE {
+        warn!("Cannot dealloc object at {:x} with bookmark {:?}", addr, bookmark);
+        return;
+    }
     let superblock_ref = unsafe { &*(bookmark as *const SuperBlock) };
     if superblock_ref.numa == current_numa {
         superblock_ref.dealloc(addr);
@@ -207,6 +211,14 @@ impl SuperBlock {
     }
 
     fn allocate(&self) -> Option<usize> {
+        let bookmark = self as *const Self as usize;
+        if self.data_base > bookmark + mem::size_of::<Self>()
+            || self.size < 2
+            || self.size as usize > *MAXIMUM_SIZE
+            || self.data_base < bookmark
+        {
+            return None;
+        }
         let res = self.free_list.pop().or_else(|| loop {
             let pos = self.reservation.load(Relaxed);
             let pos_ext = pos as usize;
@@ -218,14 +230,16 @@ impl SuperBlock {
                 let tuple_size = bookmark_size + obj_size_ext;
                 let new_pos = pos + tuple_size as u32;
                 if self.reservation.compare_and_swap(pos, new_pos, Relaxed) == pos {
-                    let bookmark = self as *const Self as usize;
                     let tuple_addr = pos_ext + self.data_base;
+                    let bookmark_word_size = size_of_bookmark_word::<usize>();
+                    debug_assert!(bookmark_word_size <= bookmark_size);
                     debug_assert_eq!(bookmark & BOOKMARK_TYPE_FLAG_MASK, 0);
                     let obj_addr = tuple_addr + bookmark_size;
-                    let bookmark_addr = obj_addr - size_of_bookmark_word::<usize>();
+                    let bookmark_addr = obj_addr - bookmark_word_size;
                     unsafe {
                         ptr::write(bookmark_addr as *mut usize, bookmark);
                     }
+                    fence(Acquire);
                     return Some(obj_addr);
                 }
             }
@@ -238,8 +252,9 @@ impl SuperBlock {
     }
 
     fn dealloc(&self, addr: usize) {
-        debug_assert!(addr >= self.data_base && addr < self.data_base + *SUPERBLOCK_SIZE);
-        debug_assert_eq!((addr - self.data_base) % self.size as usize, 0);
+        if addr < self.data_base || addr > self.data_base + *SUPERBLOCK_SIZE {
+            return;
+        }
         self.free_list.push(addr);
         self.used.fetch_sub(self.size, Relaxed);
     }
