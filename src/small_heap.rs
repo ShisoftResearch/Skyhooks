@@ -15,9 +15,10 @@ use std::alloc::GlobalAlloc;
 use std::cell::{Cell, RefCell};
 use std::clone::Clone;
 use std::ops::Deref;
-use std::sync::atomic::Ordering::Relaxed;
+use std::sync::atomic::Ordering::{Relaxed, Acquire};
 use std::sync::Arc;
 use std::thread;
+use std::sync::atomic::fence;
 
 type TSizeClasses = [SizeClass; NUM_SIZE_CLASS];
 
@@ -219,8 +220,13 @@ impl SuperBlock {
                 if self.reservation.compare_and_swap(pos, new_pos, Relaxed) == pos {
                     let bookmark = self as *const Self as usize;
                     let tuple_addr = pos_ext + self.data_base;
-                    let object_addr = make_bookmark::<usize>(tuple_addr, bookmark_size, bookmark, false);
-                    return Some(object_addr.0);
+                    debug_assert_eq!(bookmark & BOOKMARK_TYPE_FLAG_MASK, 0);
+                    let obj_addr = tuple_addr + bookmark_size;
+                    let bookmark_addr = obj_addr - size_of_bookmark_word::<usize>();
+                    unsafe {
+                        ptr::write(bookmark_addr as *mut usize, bookmark);
+                    }
+                    return Some(obj_addr);
                 }
             }
         });

@@ -152,12 +152,10 @@ unsafe impl<A: Alloc + Default> GlobalAlloc for AllocatorInstance<A> {
             ptr::write(origin_ptr, origin_addr);
         }
         debug_validate(final_addr as Ptr, actual_size);
-        fence(Acquire);
         return final_addr as *mut u8;
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        fence(Release);
         let (actual_size, size_class_index) = self.size_of_object(&layout);
         let addr = ptr as usize;
         let size_ptr = (addr - mem::size_of::<usize>()) as *mut usize;
