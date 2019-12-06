@@ -5,7 +5,7 @@
 // new address space will be allocated from the system
 
 use crate::collections::lflist;
-use crate::generic_heap::{size_class_index_from_size, NUM_SIZE_CLASS};
+use crate::generic_heap::{size_class_index_from_size, NUM_SIZE_CLASS, bookmark_size, make_bookmark, size_of_bookmark_word, BOOKMARK_TYPE_FLAG_MASK, object_bookmark};
 use crate::mmap::{dealloc_regional, mmap_without_fd, munmap_memory};
 use crate::mmap_heap::*;
 use crate::utils::*;
@@ -22,11 +22,10 @@ use std::mem::MaybeUninit;
 const BUMP_SIZE_CLASS: usize = NUM_SIZE_CLASS << 1;
 
 type SizeClasses<A: Alloc + Default> = [SizeClass<A>; BUMP_SIZE_CLASS];
+type Bookmark = (usize, usize);
 
 lazy_static! {
     static ref ALLOC_INNER: AllocatorInstance<MmapAllocator> = AllocatorInstance::new();
-    static ref MALLOC_SIZE: lfmap::WordMap<MmapAllocator, AddressHasher> =
-        lfmap::WordMap::<MmapAllocator, AddressHasher>::with_capacity(256);
     static ref MAXIMUM_FREE_LIST_COVERED_SIZE: usize = maximum_free_list_covered_size();
 }
 
@@ -129,16 +128,24 @@ impl<A: Alloc + Default> AllocatorInstance<A> {
 
 unsafe impl<A: Alloc + Default> GlobalAlloc for AllocatorInstance<A> {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let align = layout.align();
         let (actual_size, size_class_index) = self.size_of_object(&layout);
+        let align = layout.align();
+        let bookmark_size = size_of_bookmark_word::<Bookmark>();
         let origin_addr = self
             .sizes
             .get(size_class_index)
             .and_then(|sc| sc.free_list.pop())
-            .unwrap_or_else(|| self.bump_allocate(actual_size));
+            .unwrap_or_else(|| {
+                let size_with_bookmark = actual_size + bookmark_size;
+                self.bump_allocate(size_with_bookmark)
+            }) + bookmark_size;
         let align_padding = align_padding(origin_addr, align);
         let final_addr = origin_addr + align_padding;
-        self.address_map.insert(final_addr, origin_addr);
+        unsafe {
+            debug_assert_eq!(actual_size & BOOKMARK_TYPE_FLAG_MASK, 0);
+            ptr::write((final_addr - mem::size_of::<usize>()) as *mut usize, actual_size + 1);
+            ptr::write((final_addr - (mem::size_of::<usize>() << 1)) as *mut usize, origin_addr);
+        }
         debug_validate(final_addr as Ptr, actual_size);
         return final_addr as *mut u8;
     }
@@ -146,16 +153,16 @@ unsafe impl<A: Alloc + Default> GlobalAlloc for AllocatorInstance<A> {
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         let (actual_size, size_class_index) = self.size_of_object(&layout);
         let addr = ptr as usize;
-        if let Some(actual_addr) = self.address_map.get(addr) {
-            let size_class_index = size_class_index_from_size(actual_size);
-            if size_class_index < self.sizes.len() {
-                debug_validate(ptr as Ptr, actual_size);
-                self.sizes[size_class_index].free_list.push(actual_addr);
-            } else {
-                // this may be a problem
-                self.address_map.remove(addr);
-                dealloc_regional(actual_addr as Ptr, actual_size);
-            }
+        let actual_addr = ptr::read((addr - (mem::size_of::<usize>() << 1)) as *const usize);
+        let size_class_index = size_class_index_from_size(actual_size);
+        if size_class_index < self.sizes.len() {
+            debug_validate(ptr as Ptr, actual_size);
+            self.sizes[size_class_index].free_list.push(actual_addr);
+        } else {
+            // this may be a problem
+            self.address_map.remove(addr);
+            let size_of_bookmark = mem::size_of::<Bookmark>();
+            dealloc_regional((actual_addr - size_of_bookmark) as Ptr, actual_size + size_of_bookmark);
         }
     }
 }
@@ -199,18 +206,12 @@ impl Default for BumpAllocator {
 
 pub unsafe fn malloc(size: Size) -> Ptr {
     let layout = Layout::from_size_align(size, 1).unwrap();
-    let ptr = BumpAllocator.alloc(layout) as Ptr;
-    MALLOC_SIZE.insert(ptr as usize, size as usize);
-    ptr
+    BumpAllocator.alloc(layout) as Ptr
 }
-pub unsafe fn free(ptr: Ptr) -> bool {
-    if let Some(size) = MALLOC_SIZE.remove(ptr as usize) {
-        let layout = Layout::from_size_align(size, 1).unwrap();
-        BumpAllocator.dealloc(ptr as *mut u8, layout);
-        true
-    } else {
-        false
-    }
+pub unsafe fn free(ptr: Ptr, bookmark: usize) {
+    // bookmark is the size here
+    let layout = Layout::from_size_align(bookmark, 1).unwrap();
+    BumpAllocator.dealloc(ptr as *mut u8, layout);
 }
 
 fn size_classes<A: Alloc + Default>() -> SizeClasses<A> {
@@ -224,9 +225,30 @@ fn size_classes<A: Alloc + Default>() -> SizeClasses<A> {
     unsafe { mem::transmute::<_, SizeClasses<A>>(data) }
 }
 
+pub unsafe fn realloc(ptr: Ptr, size: Size) -> Ptr {
+    if ptr == NULL_PTR {
+        return malloc(size);
+    }
+    let (bookmark, is_bump) = object_bookmark(ptr as usize);
+    debug_assert!(is_bump);
+    if size == 0 {
+        free(ptr, bookmark);
+        return NULL_PTR;
+    }
+    let old_size = size_of(ptr, bookmark);
+    if old_size >= size {
+        info!("old size is larger than requesting size, untouched");
+        return ptr;
+    }
+    let new_ptr = malloc(size);
+    memcpy(new_ptr, ptr, old_size);
+    free(ptr, bookmark);
+    new_ptr
+}
+
 #[inline]
-pub fn size_of(ptr: Ptr) -> Option<usize> {
-    MALLOC_SIZE.get(ptr as usize)
+pub fn size_of(ptr: Ptr, bookmark: usize) -> usize {
+    bookmark
 }
 
 #[inline]
@@ -236,31 +258,7 @@ fn maximum_free_list_covered_size() -> usize {
 
 #[inline]
 fn actual_size_of(align: usize, size: usize) -> usize {
-    size + align - 1
-}
-
-pub unsafe fn realloc(ptr: Ptr, size: Size) -> Ptr {
-    if ptr == NULL_PTR {
-        return malloc(size);
-    }
-    if size == 0 {
-        free(ptr);
-        return NULL_PTR;
-    }
-    let old_size = if let Some(size) = MALLOC_SIZE.get(ptr as usize) {
-        size
-    } else {
-        warn!("Cannot determinate old object");
-        return NULL_PTR;
-    };
-    if old_size >= size {
-        info!("old size is larger than requesting size, untouched");
-        return ptr;
-    }
-    let new_ptr = malloc(size);
-    memcpy(new_ptr, ptr, old_size);
-    free(ptr);
-    new_ptr
+    upper_power_of_2(size + align - 1)
 }
 
 #[cfg(test)]

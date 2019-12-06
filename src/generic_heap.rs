@@ -1,10 +1,16 @@
 use super::*;
-use crate::utils::is_power_of_2;
-use core::mem;
+use crate::utils::{is_power_of_2, CACHE_LINE_SIZE};
+use core::{mem, ptr};
 use libc::*;
 use std::ptr::null_mut;
+use std::cmp::{min, max};
 
 pub const NUM_SIZE_CLASS: usize = 16;
+
+// because the allocated object address are cache aligned and starts from 2,
+// there will be a zero in the LSB of the address, use this bit as the flag
+// indicate if the object is big object or small object
+pub const BOOKMARK_TYPE_FLAG_MASK: usize = 1;
 
 #[derive(Clone)]
 pub struct ObjectMeta {
@@ -29,16 +35,18 @@ pub unsafe fn malloc(size: Size) -> Ptr {
 
 #[cfg(not(feature = "bump_heap_only"))]
 pub unsafe fn free(ptr: Ptr) {
-    if !small_heap::free(ptr) {
-    } else if !large_heap::free(ptr) {
+    let (bookmark, is_bump) = object_bookmark(ptr as usize);
+    if !is_bump {
+        small_heap::free(ptr, bookmark);
     } else {
-        warn!("Cannot find object to free at {:x?}", ptr as usize);
+        large_heap::free(ptr, bookmark)
     }
 }
 
 #[cfg(feature = "bump_heap_only")]
 pub unsafe fn free(ptr: Ptr) {
-    bump_heap::free(ptr);
+    let (bookmark, is_bump) = object_bookmark(ptr as usize);
+    bump_heap::free(ptr, bookmark);
 }
 
 pub unsafe fn realloc(ptr: Ptr, size: Size) -> Ptr {
@@ -49,13 +57,11 @@ pub unsafe fn realloc(ptr: Ptr, size: Size) -> Ptr {
         free(ptr);
         return NULL_PTR;
     }
-    let old_size = if let Some(size) = small_heap::size_of(ptr) {
-        size
-    } else if let Some(_) = large_heap::size_of(ptr) {
-        size
+    let (bookmark, is_bump) = object_bookmark(ptr as usize);
+    let old_size = if is_bump {
+        large_heap::size_of(ptr, bookmark)
     } else {
-        warn!("Cannot determinate old object");
-        return NULL_PTR;
+        small_heap::size_of(ptr, bookmark)
     };
     if old_size >= size {
         info!("old size is larger than requesting size, untouched");
@@ -84,4 +90,37 @@ pub fn size_class_index_from_size(size: usize) -> usize {
 #[inline]
 pub fn log_2_of(num: usize) -> usize {
     mem::size_of::<usize>() * 8 - num.leading_zeros() as usize - 1
+}
+
+pub unsafe fn object_bookmark(obj_addr: usize) -> (usize, bool) {
+    let bookmark_ptr = (obj_addr - size_of_bookmark_word::<usize>()) as *const usize;
+    let bookmark = ptr::read(bookmark_ptr);
+    (bookmark & (!BOOKMARK_TYPE_FLAG_MASK), bookmark & BOOKMARK_TYPE_FLAG_MASK == 0)
+}
+
+pub unsafe fn full_object_bookmark<T>(obj_addr: usize) -> T {
+    let bookmark_ptr = (obj_addr - size_of_bookmark_word::<T>()) as *const T;
+    ptr::read(bookmark_ptr)
+}
+
+pub fn bookmark_size<T>(obj_size: usize) -> usize {
+    min(CACHE_LINE_SIZE, max(obj_size, size_of_bookmark_word::<T>() ))
+}
+
+#[inline(always)]
+pub fn size_of_bookmark_word<T>() -> usize {
+    mem::size_of::<T>()
+}
+
+// return the address for the object
+pub fn make_bookmark<T>(tuple_addr: usize, bookmark_size: usize, bookmark: usize, is_bump: bool) -> (usize, usize) {
+    debug_assert_eq!(bookmark & BOOKMARK_TYPE_FLAG_MASK, 0);
+    let size_of_bookmark_word = size_of_bookmark_word::<T>();
+    let bookmark_addr = tuple_addr + (bookmark_size - size_of_bookmark_word);
+    let object_addr = tuple_addr + bookmark_size;
+    let bookmark_with_type = if is_bump { bookmark + 1 } else { bookmark };
+    unsafe {
+        ptr::write(bookmark_addr as *mut usize, bookmark_with_type)
+    };
+    return (object_addr, bookmark_addr + mem::size_of::<usize>());
 }

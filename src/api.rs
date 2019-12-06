@@ -1,12 +1,13 @@
 use crate::mmap_heap::*;
 use crate::utils::*;
-use crate::{bump_heap, generic_heap, Ptr, Size, NULL_PTR};
+use crate::{bump_heap, generic_heap, Ptr, Size, NULL_PTR, small_heap};
 use core::alloc::{GlobalAlloc, Layout};
 use core::cell::Cell;
 use lfmap::{Map, WordMap};
 use libc::*;
 use std::alloc::{Alloc, AllocErr};
 use std::ptr::{null_mut, NonNull};
+use crate::generic_heap::object_bookmark;
 
 thread_local! {
     pub static INNER_CALL: Cell<bool> = Cell::new(false);
@@ -41,7 +42,9 @@ pub unsafe fn nu_free(ptr: Ptr) {
             generic_heap::free(ptr);
             is_inner.set(false);
         } else {
-            bump_heap::free(ptr);
+            let (bookmark, is_bump) = object_bookmark(ptr as usize);
+            debug_assert!(is_bump);
+            bump_heap::free(ptr, bookmark)
         }
     })
 }

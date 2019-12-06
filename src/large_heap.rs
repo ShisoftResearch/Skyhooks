@@ -14,15 +14,16 @@ pub unsafe fn allocate(size: usize) -> Ptr {
     if total_size < crate::bump_heap::HEAP_VIRT_SIZE {
         crate::bump_heap::malloc(total_size)
     } else {
+        unimplemented!();
         let mut ma = MmapAllocator;
         ma.alloc(Layout::from_size_align(size, 1).unwrap())
             .unwrap()
             .as_ptr() as Ptr
     }
 }
-pub unsafe fn free(ptr: Ptr) -> bool {
-    crate::bump_heap::free(ptr)
+pub unsafe fn free(ptr: Ptr, bookmark: usize) {
+    crate::bump_heap::free(ptr, bookmark)
 }
-pub fn size_of(ptr: Ptr) -> Option<usize> {
-    crate::bump_heap::size_of(ptr)
+pub fn size_of(ptr: Ptr, bookmark: usize) -> usize {
+    crate::bump_heap::size_of(ptr, bookmark)
 }
