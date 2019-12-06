@@ -62,5 +62,5 @@ use core::ffi::c_void;
 //static INNER_ALLOCATOR: NullocAllocator = NullocAllocator;
 //
 //#[cfg(feature = "bump_heap_only")]
-#[global_allocator]
-static INNER_ALLOCATOR: BumpAllocator = BumpAllocator;
+//#[global_allocator]
+//static INNER_ALLOCATOR: BumpAllocator = BumpAllocator;

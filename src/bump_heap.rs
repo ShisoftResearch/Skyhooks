@@ -18,6 +18,8 @@ use crossbeam::utils::Backoff;
 use lfmap::Map;
 use libc::*;
 use std::mem::MaybeUninit;
+use std::sync::atomic::fence;
+use std::sync::atomic::Ordering::{SeqCst, Acquire, Release};
 
 const BUMP_SIZE_CLASS: usize = NUM_SIZE_CLASS << 1;
 
@@ -136,7 +138,7 @@ unsafe impl<A: Alloc + Default> GlobalAlloc for AllocatorInstance<A> {
             .get(size_class_index)
             .and_then(|sc| sc.free_list.pop())
             .unwrap_or_else(|| {
-                let size_with_bookmark = actual_size + (bookmark_size << 1);
+                let size_with_bookmark = actual_size + bookmark_size;
                 let addr = self.bump_allocate(size_with_bookmark);
                 addr
             }) + bookmark_size;
@@ -144,30 +146,41 @@ unsafe impl<A: Alloc + Default> GlobalAlloc for AllocatorInstance<A> {
         let final_addr = origin_addr + align_padding;
         unsafe {
             debug_assert_eq!(actual_size & BOOKMARK_TYPE_FLAG_MASK, 0);
-            ptr::write((final_addr - mem::size_of::<usize>()) as *mut usize, actual_size + 1);
-            ptr::write((final_addr - bookmark_size) as *mut usize, origin_addr);
+            let size_ptr = (final_addr - mem::size_of::<usize>()) as *mut usize;
+            let origin_ptr = (size_ptr as usize - mem::size_of::<usize>()) as *mut usize;
+            ptr::write(size_ptr, actual_size + 1);
+            ptr::write(origin_ptr, origin_addr);
         }
         debug_validate(final_addr as Ptr, actual_size);
+        fence(Acquire);
         return final_addr as *mut u8;
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        fence(Release);
         let (actual_size, size_class_index) = self.size_of_object(&layout);
         let addr = ptr as usize;
-        let record_size = ptr::read((addr - mem::size_of::<usize>()) as *const usize) - 1;
-        let actual_addr = ptr::read((addr - (mem::size_of::<usize>() << 1)) as *const usize);
-        debug_assert_eq!(record_size, actual_size);
-        debug_assert!(actual_addr <= addr);
-        debug_assert!(actual_addr > addr - maximum_free_list_covered_size());
+        let size_ptr = (addr - mem::size_of::<usize>()) as *mut usize;
+        let origin_ptr = (size_ptr as usize - mem::size_of::<usize>()) as *mut usize;
+        let record_size = ptr::read(size_ptr) - 1;
+        let origin_addr = ptr::read(origin_ptr);
+        if origin_addr <= addr
+            || origin_addr > addr - maximum_free_list_covered_size()
+            || record_size != actual_size
+        {
+            // fail safe, not sure how this happened though
+            warn!("Cannot dealloc object at {:x}", ptr as usize);
+            return;
+        }
         let size_class_index = size_class_index_from_size(actual_size);
         if size_class_index < self.sizes.len() {
             debug_validate(ptr as Ptr, actual_size);
-            self.sizes[size_class_index].free_list.push(actual_addr);
+            self.sizes[size_class_index].free_list.push(origin_addr);
         } else {
             // this may be a problem
             self.address_map.remove(addr);
             let size_of_bookmark = mem::size_of::<Bookmark>();
-            dealloc_regional((actual_addr - size_of_bookmark) as Ptr, actual_size + size_of_bookmark);
+            dealloc_regional((origin_addr - size_of_bookmark) as Ptr, actual_size + size_of_bookmark);
         }
     }
 }
