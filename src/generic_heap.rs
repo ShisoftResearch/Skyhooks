@@ -37,6 +37,7 @@ pub unsafe fn malloc(size: Size) -> Ptr {
 pub unsafe fn free(ptr: Ptr) {
     let (bookmark, is_bump) = object_bookmark(ptr as usize);
     if !is_bump {
+        debug_assert!(bookmark <= ptr as usize);
         small_heap::free(ptr, bookmark);
     } else {
         large_heap::free(ptr, bookmark)
@@ -92,10 +93,13 @@ pub fn log_2_of(num: usize) -> usize {
     mem::size_of::<usize>() * 8 - num.leading_zeros() as usize - 1
 }
 
+#[inline]
 pub unsafe fn object_bookmark(obj_addr: usize) -> (usize, bool) {
     let bookmark_ptr = (obj_addr - size_of_bookmark_word::<usize>()) as *const usize;
     let bookmark = ptr::read(bookmark_ptr);
-    (bookmark & (!BOOKMARK_TYPE_FLAG_MASK), bookmark & BOOKMARK_TYPE_FLAG_MASK == 0)
+    let unmasked_bookmark = bookmark & (!BOOKMARK_TYPE_FLAG_MASK);
+    let is_bump = bookmark & BOOKMARK_TYPE_FLAG_MASK != 0;
+    (unmasked_bookmark, is_bump)
 }
 
 pub unsafe fn full_object_bookmark<T>(obj_addr: usize) -> T {

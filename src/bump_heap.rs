@@ -137,7 +137,8 @@ unsafe impl<A: Alloc + Default> GlobalAlloc for AllocatorInstance<A> {
             .and_then(|sc| sc.free_list.pop())
             .unwrap_or_else(|| {
                 let size_with_bookmark = actual_size + bookmark_size;
-                self.bump_allocate(size_with_bookmark)
+                let addr = self.bump_allocate(size_with_bookmark);
+                addr
             }) + bookmark_size;
         let align_padding = align_padding(origin_addr, align);
         let final_addr = origin_addr + align_padding;
@@ -153,7 +154,11 @@ unsafe impl<A: Alloc + Default> GlobalAlloc for AllocatorInstance<A> {
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         let (actual_size, size_class_index) = self.size_of_object(&layout);
         let addr = ptr as usize;
+        let record_size = ptr::read((addr - mem::size_of::<usize>()) as *const usize) - 1;
+        debug_assert_eq!(record_size, actual_size);
         let actual_addr = ptr::read((addr - (mem::size_of::<usize>() << 1)) as *const usize);
+        debug_assert!(actual_addr <= addr);
+        debug_assert!(actual_addr > addr - maximum_free_list_covered_size());
         let size_class_index = size_class_index_from_size(actual_size);
         if size_class_index < self.sizes.len() {
             debug_validate(ptr as Ptr, actual_size);
