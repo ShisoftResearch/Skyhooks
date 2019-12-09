@@ -22,7 +22,7 @@ use smallvec::SmallVec;
 
 type TSizeClasses = [SizeClass; NUM_SIZE_CLASS];
 type PerNodeMeta = SmallVec<[LazyWrapper<NodeMeta>; 4]>;
-type PerCPUMeta = SmallVec<[LazyWrapper<CoreMeta>; 128]>;
+type PerCPUMeta = SmallVec<[LazyWrapper<CoreMeta>; 64]>;
 
 thread_local! {
     static THREAD_META: ThreadMeta = ThreadMeta::new()
@@ -296,13 +296,13 @@ fn maximum_size() -> usize {
 }
 
 fn gen_core_meta() -> PerCPUMeta {
-    (0..*NUM_CPU)
-        .map(|cpu_id| {
-            LazyWrapper::new(Box::new(move || CoreMeta {
-                size_class_list: size_classes(cpu_id, SYS_CPU_NODE[&cpu_id]),
-            }))
-        })
-        .collect()
+    let mut vec = PerCPUMeta::new();
+    for cpu_id in 0..*NUM_CPU {
+        vec.push(LazyWrapper::new(Box::new(move || CoreMeta {
+            size_class_list: size_classes(cpu_id, SYS_CPU_NODE[&cpu_id]),
+        })));
+    }
+    return vec;
 }
 
 fn debug_check_cache_aligned(addr: usize, size: usize, align: usize) {
@@ -332,7 +332,7 @@ fn get_from_objects(current_numa: u16, addr: usize) -> Option<usize> {
 
 #[cfg(test)]
 mod test {
-    use crate::api::NullocAllocator;
+    use crate::api::SkyhooksAllocator;
     use crate::small_heap::{allocate, free};
     use crate::utils::AddressHasher;
     use lfmap::Map;
@@ -360,7 +360,7 @@ mod test {
 
     #[test]
     pub fn application() {
-        let map = lfmap::WordMap::<NullocAllocator, AddressHasher>::with_capacity(64);
+        let map = lfmap::WordMap::<SkyhooksAllocator, AddressHasher>::with_capacity(64);
         for i in 5..10240 {
             map.insert(i, i * 2);
         }

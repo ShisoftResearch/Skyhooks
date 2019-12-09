@@ -273,7 +273,7 @@ unsafe impl<T: Sync> Sync for LazyWrapper<T> {}
 
 #[cfg(test)]
 mod test {
-    use crate::api::NullocAllocator;
+    use crate::api::SkyhooksAllocator;
     use crate::collections::lflist::WordList;
     use crate::utils::AddressHasher;
     use lfmap::{Map, PassthroughHasher, WordMap};
@@ -407,7 +407,7 @@ mod test {
 
     #[bench]
     fn alloc(b: &mut Bencher) {
-        let allocator = NullocAllocator;
+        let allocator = SkyhooksAllocator;
         b.iter(|| unsafe {
             allocator.alloc(Layout::from_size_align(1, 1).unwrap());
         });

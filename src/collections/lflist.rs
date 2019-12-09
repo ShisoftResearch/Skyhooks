@@ -32,8 +32,10 @@ const EXCHANGE_EMPTY: usize = 0;
 const EXCHANGE_WAITING: usize = 1;
 const EXCHANGE_BUSY: usize = 2;
 const EXCHANGE_SPIN_WAIT_NS: usize = 150;
+const MAXIMUM_EXCHANGE_SLOTS: usize = 16;
 
 type ExchangeData<T> = Option<(usize, T)>;
+type ExchangeArrayVec<T> = SmallVec<[ExchangeSlot<T>; MAXIMUM_EXCHANGE_SLOTS]>;
 
 struct BufferMeta<T: Default, A: Alloc + Default> {
     head: AtomicUsize,
@@ -52,10 +54,10 @@ pub struct ExchangeSlot<T: Default + Copy> {
 }
 
 pub struct ExchangeArray<T: Default + Copy, A: Alloc + Default> {
-    slots: FixedVec<ExchangeSlot<T>, A>,
     rand: XorRand,
     shadow: PhantomData<A>,
     capacity: usize,
+    slots: ExchangeArrayVec<T>,
 }
 
 pub struct List<T: Default + Copy, A: Alloc + Default = Global> {
@@ -785,13 +787,13 @@ impl<T: Default + Copy, A: Alloc + Default> ExchangeArray<T, A> {
     pub fn new() -> Self {
         let num_cpus = *NUM_CPU;
         let default_capacity = num_cpus >> 3;
-        Self::with_capacity(max(default_capacity, 2) as usize)
+        Self::with_capacity(min(max(default_capacity, 2) as usize, MAXIMUM_EXCHANGE_SLOTS))
     }
 
     pub fn with_capacity(cap: usize) -> Self {
-        let mut slots = FixedVec::new(cap);
+        let mut slots = SmallVec::with_capacity(cap);
         for i in 0..cap {
-            slots[i] = ExchangeSlot::new()
+            slots.push(ExchangeSlot::new());
         }
         Self {
             slots,
