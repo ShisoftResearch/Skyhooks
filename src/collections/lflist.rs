@@ -23,6 +23,7 @@ use std::ptr::null_mut;
 use std::sync::atomic::Ordering::{Relaxed, SeqCst};
 use std::sync::atomic::{fence, AtomicPtr, AtomicUsize};
 use std::time::Instant;
+use smallvec::SmallVec;
 
 const EMPTY_SLOT: usize = 0;
 const SENTINEL_SLOT: usize = 1;

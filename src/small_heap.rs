@@ -18,16 +18,19 @@ use std::ops::Deref;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;
 use std::thread;
+use smallvec::SmallVec;
 
 type TSizeClasses = [SizeClass; NUM_SIZE_CLASS];
+type PerNodeMeta = SmallVec<[LazyWrapper<NodeMeta>; 4]>;
+type PerCPUMeta = SmallVec<[LazyWrapper<CoreMeta>; 128]>;
 
 thread_local! {
     static THREAD_META: ThreadMeta = ThreadMeta::new()
 }
 
 lazy_static! {
-    static ref PER_NODE_META: Vec<LazyWrapper<NodeMeta>> = gen_numa_node_list();
-    static ref PER_CPU_META: Vec<LazyWrapper<CoreMeta>> = gen_core_meta();
+    static ref PER_NODE_META: PerNodeMeta = gen_numa_node_list();
+    static ref PER_CPU_META: PerCPUMeta = gen_core_meta();
     static ref SUPERBLOCK_SIZE: usize = *MAXIMUM_SIZE << 2;
     pub static ref MAXIMUM_SIZE: usize = maximum_size();
 }
@@ -246,9 +249,9 @@ impl SuperBlock {
     }
 }
 
-fn gen_numa_node_list() -> Vec<LazyWrapper<NodeMeta>> {
+fn gen_numa_node_list() -> PerNodeMeta {
     let num_nodes = *NUM_NUMA_NODES;
-    let mut nodes = Vec::with_capacity(num_nodes as usize);
+    let mut nodes = PerNodeMeta::with_capacity(num_nodes as usize);
     for i in 0..num_nodes {
         nodes.push(LazyWrapper::new(Box::new(move || NodeMeta {
             size_class_list: size_classes(0, i),
@@ -292,7 +295,7 @@ fn maximum_size() -> usize {
     2 << (NUM_SIZE_CLASS - 1)
 }
 
-fn gen_core_meta() -> Vec<LazyWrapper<CoreMeta>> {
+fn gen_core_meta() -> PerCPUMeta {
     (0..*NUM_CPU)
         .map(|cpu_id| {
             LazyWrapper::new(Box::new(move || CoreMeta {
