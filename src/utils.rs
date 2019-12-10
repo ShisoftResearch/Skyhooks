@@ -15,9 +15,11 @@ use std::collections::HashMap;
 use std::fs::read_dir;
 use std::hash::Hasher;
 use std::ops::Deref;
+use smallvec::SmallVec;
 
 pub const CACHE_LINE_SIZE: usize = 64;
 pub type CacheLineType = (usize, usize, usize, usize, usize, usize, usize, usize);
+type NodeCPUsVec = SmallVec<[u16; 64]>;
 
 const HASH_MAGIC_NUMBER_1: usize = 67280421310721;
 const HASH_MAGIC_NUMBER_2: usize = 123456789;
@@ -25,7 +27,7 @@ const HASH_MAGIC_NUMBER_3: usize = 362436069;
 
 lazy_static! {
     pub static ref SYS_PAGE_SIZE: usize = unsafe { sysconf(_SC_PAGESIZE) as usize };
-    pub static ref SYS_NODE_CPUS: HashMap<u16, Vec<u16>> = node_topology();
+    pub static ref SYS_NODE_CPUS: HashMap<u16, NodeCPUsVec> = node_topology();
     pub static ref SYS_CPU_NODE: HashMap<u16, u16> = cpu_topology();
     pub static ref NUM_NUMA_NODES: u16 = num_numa_nodes();
     pub static ref NUM_CPU: u16 = unsafe { libc::sysconf(libc::_SC_NPROCESSORS_ONLN) as u16 };
@@ -85,7 +87,7 @@ pub fn cpu_topology() -> HashMap<u16, u16> {
     cpus
 }
 
-pub fn node_topology() -> HashMap<u16, Vec<u16>> {
+pub fn node_topology() -> HashMap<u16, NodeCPUsVec> {
     let node_regex = Regex::new(r"node[0-9]*$").unwrap();
     let cpu_regex = Regex::new(r"cpu[0-9]*$").unwrap();
     let number_regex = Regex::new(r"\d+").unwrap();
@@ -119,7 +121,7 @@ pub fn node_topology() -> HashMap<u16, Vec<u16>> {
                         id
                     })
                     .map(|cpu_id| cpu_id)
-                    .collect::<Vec<_>>();
+                    .collect::<NodeCPUsVec>();
                 (node_num, cpus)
             })
             .collect(),
@@ -271,7 +273,7 @@ unsafe impl<T: Sync> Sync for LazyWrapper<T> {}
 
 #[cfg(test)]
 mod test {
-    use crate::api::NullocAllocator;
+    use crate::api::SkyhooksAllocator;
     use crate::collections::lflist::WordList;
     use crate::utils::AddressHasher;
     use lfmap::{Map, PassthroughHasher, WordMap};
@@ -405,7 +407,7 @@ mod test {
 
     #[bench]
     fn alloc(b: &mut Bencher) {
-        let allocator = NullocAllocator;
+        let allocator = SkyhooksAllocator;
         b.iter(|| unsafe {
             allocator.alloc(Layout::from_size_align(1, 1).unwrap());
         });

@@ -33,7 +33,7 @@ pub type Void = libc::c_void;
 pub const NULL: usize = 0;
 pub const NULL_PTR: *mut c_void = NULL as *mut c_void;
 
-use crate::api::NullocAllocator;
+use crate::api::SkyhooksAllocator;
 use crate::bump_heap::BumpAllocator;
 use core::ffi::c_void;
 
@@ -59,8 +59,8 @@ pub unsafe fn realloc(ptr: Ptr, size: Size) -> Ptr {
 
 #[global_allocator]
 #[cfg(not(feature = "bump_heap_only"))]
-static INNER_ALLOCATOR: NullocAllocator = NullocAllocator;
+static INNER_ALLOCATOR: SkyhooksAllocator = SkyhooksAllocator;
 //
-//#[global_allocator]
 //#[cfg(feature = "bump_heap_only")]
+//#[global_allocator]
 //static INNER_ALLOCATOR: BumpAllocator = BumpAllocator;

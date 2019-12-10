@@ -23,6 +23,7 @@ rand = "*"
 rand_xoshiro = "*"
 lazy-init = "*"
 seahash = "*"
+smallvec = "*"
 
 [dependencies.regex]
 version = "1.3.1"

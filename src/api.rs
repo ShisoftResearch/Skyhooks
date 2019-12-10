@@ -70,9 +70,9 @@ pub unsafe fn nu_realloc(ptr: Ptr, size: Size) -> Ptr {
 }
 
 // Allocator for rust itself for internal heaps
-pub struct NullocAllocator;
+pub struct SkyhooksAllocator;
 
-unsafe impl GlobalAlloc for NullocAllocator {
+unsafe impl GlobalAlloc for SkyhooksAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let size = layout.size();
         let align = layout.align();
@@ -91,13 +91,13 @@ unsafe impl GlobalAlloc for NullocAllocator {
     }
 }
 
-impl Default for NullocAllocator {
+impl Default for SkyhooksAllocator {
     fn default() -> Self {
-        NullocAllocator
+        SkyhooksAllocator
     }
 }
 
-unsafe impl Alloc for NullocAllocator {
+unsafe impl Alloc for SkyhooksAllocator {
     unsafe fn alloc(&mut self, layout: Layout) -> Result<NonNull<u8>, AllocErr> {
         Ok(NonNull::new((self as &mut GlobalAlloc).alloc(layout)).unwrap())
     }

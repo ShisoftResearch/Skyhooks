@@ -18,16 +18,19 @@ use std::ops::Deref;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;
 use std::thread;
+use smallvec::SmallVec;
 
 type TSizeClasses = [SizeClass; NUM_SIZE_CLASS];
+type PerNodeMeta = SmallVec<[LazyWrapper<NodeMeta>; 4]>;
+type PerCPUMeta = SmallVec<[LazyWrapper<CoreMeta>; 64]>;
 
 thread_local! {
     static THREAD_META: ThreadMeta = ThreadMeta::new()
 }
 
 lazy_static! {
-    static ref PER_NODE_META: Vec<LazyWrapper<NodeMeta>> = gen_numa_node_list();
-    static ref PER_CPU_META: Vec<LazyWrapper<CoreMeta>> = gen_core_meta();
+    static ref PER_NODE_META: PerNodeMeta = gen_numa_node_list();
+    static ref PER_CPU_META: PerCPUMeta = gen_core_meta();
     static ref SUPERBLOCK_SIZE: usize = *MAXIMUM_SIZE << 2;
     pub static ref MAXIMUM_SIZE: usize = maximum_size();
 }
@@ -246,9 +249,9 @@ impl SuperBlock {
     }
 }
 
-fn gen_numa_node_list() -> Vec<LazyWrapper<NodeMeta>> {
+fn gen_numa_node_list() -> PerNodeMeta {
     let num_nodes = *NUM_NUMA_NODES;
-    let mut nodes = Vec::with_capacity(num_nodes as usize);
+    let mut nodes = PerNodeMeta::with_capacity(num_nodes as usize);
     for i in 0..num_nodes {
         nodes.push(LazyWrapper::new(Box::new(move || NodeMeta {
             size_class_list: size_classes(0, i),
@@ -292,14 +295,14 @@ fn maximum_size() -> usize {
     2 << (NUM_SIZE_CLASS - 1)
 }
 
-fn gen_core_meta() -> Vec<LazyWrapper<CoreMeta>> {
-    (0..*NUM_CPU)
-        .map(|cpu_id| {
-            LazyWrapper::new(Box::new(move || CoreMeta {
-                size_class_list: size_classes(cpu_id, SYS_CPU_NODE[&cpu_id]),
-            }))
-        })
-        .collect()
+fn gen_core_meta() -> PerCPUMeta {
+    let mut vec = PerCPUMeta::new();
+    for cpu_id in 0..*NUM_CPU {
+        vec.push(LazyWrapper::new(Box::new(move || CoreMeta {
+            size_class_list: size_classes(cpu_id, SYS_CPU_NODE[&cpu_id]),
+        })));
+    }
+    return vec;
 }
 
 fn debug_check_cache_aligned(addr: usize, size: usize, align: usize) {
@@ -329,7 +332,7 @@ fn get_from_objects(current_numa: u16, addr: usize) -> Option<usize> {
 
 #[cfg(test)]
 mod test {
-    use crate::api::NullocAllocator;
+    use crate::api::SkyhooksAllocator;
     use crate::small_heap::{allocate, free};
     use crate::utils::AddressHasher;
     use lfmap::Map;
@@ -357,7 +360,7 @@ mod test {
 
     #[test]
     pub fn application() {
-        let map = lfmap::WordMap::<NullocAllocator, AddressHasher>::with_capacity(64);
+        let map = lfmap::WordMap::<SkyhooksAllocator, AddressHasher>::with_capacity(64);
         for i in 5..10240 {
             map.insert(i, i * 2);
         }
