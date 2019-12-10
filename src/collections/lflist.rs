@@ -31,7 +31,7 @@ const SENTINEL_SLOT: usize = 1;
 const EXCHANGE_EMPTY: usize = 0;
 const EXCHANGE_WAITING: usize = 1;
 const EXCHANGE_BUSY: usize = 2;
-const EXCHANGE_SPIN_WAIT_NS: usize = 150;
+const EXCHANGE_SPIN_WAIT: usize = 200;
 const MAXIMUM_EXCHANGE_SLOTS: usize = 16;
 
 type ExchangeData<T> = Option<(usize, T)>;
@@ -674,6 +674,7 @@ impl<T: Default + Copy> ExchangeSlot<T> {
         let backoff = Backoff::new();
         let origin_data_flag = data.as_ref().map(|(f, _)| *f);
         let mut data_content_mut = unsafe { &mut *self.data.get() };
+        let mut spin_count = 0;
         if state == EXCHANGE_EMPTY {
             self.wait_state_data_until(state, &backoff);
             if self
@@ -682,10 +683,10 @@ impl<T: Default + Copy> ExchangeSlot<T> {
                 == EXCHANGE_EMPTY
             {
                 self.store_state_data(Some(data));
-                let now = Instant::now();
                 loop {
                     // check if it can spin
-                    if (now.elapsed().as_nanos() as usize) < EXCHANGE_SPIN_WAIT_NS
+                    spin_count += 1;
+                    if spin_count< EXCHANGE_SPIN_WAIT
                         // if not, CAS to empty, can fail by other thread set BUSY
                         || self.state.compare_and_swap(EXCHANGE_WAITING, EXCHANGE_EMPTY, Relaxed) == EXCHANGE_BUSY
                     {
