@@ -147,7 +147,7 @@ impl SizeClass {
             size,
             numa,
             cpu,
-            blocks: WordList::new(),
+            blocks: WordList::new(false),
         }
     }
 
@@ -208,7 +208,7 @@ impl SuperBlock {
                     cpu,
                     reservation: AtomicU32::new(0),
                     used: AtomicU32::new(0),
-                    free_list: lflist::WordList::new(),
+                    free_list: lflist::WordList::new(false),
                 },
             );
         }
@@ -256,7 +256,7 @@ fn gen_numa_node_list() -> PerNodeMeta {
         nodes.push(LazyWrapper::new(Box::new(move || NodeMeta {
             size_class_list: size_classes(0, i),
             bump_allocator: bump_heap::AllocatorInstance::new(),
-            pending_free: lflist::WordList::new(),
+            pending_free: lflist::WordList::new(false),
             objects: lfmap::WordMap::with_capacity(*SYS_PAGE_SIZE),
         })));
     }

@@ -73,12 +73,13 @@ pub struct ListIterator<T: Default + Copy, A: Alloc + Default> {
 }
 
 impl<T: Default + Copy, A: Alloc + Default> List<T, A> {
-    pub fn new(buffer_cap: usize) -> Self {
+    pub fn new(buffer_cap: usize, exchange: bool) -> Self {
         let first_buffer = BufferMeta::new(buffer_cap);
+        let exchange_array = if exchange { ExchangeArray::new() } else { ExchangeArray::with_capacity(0) };
         Self {
             head: AtomicPtr::new(first_buffer),
             count: AtomicUsize::new(0),
-            exchange: ExchangeArray::new(),
+            exchange: exchange_array,
             buffer_cap,
         }
     }
@@ -134,16 +135,20 @@ impl<T: Default + Copy, A: Alloc + Default> List<T, A> {
                     return;
                 }
             }
-            match self.exchange.exchange(Some((flag, data))) {
-                Ok(Some(tuple)) | Err(Some(tuple)) => {
-                    // exchanged a push, reset this push parameters
-                    flag = tuple.0;
-                    data = tuple.1;
+            if self.exchange.enabled() {
+                match self.exchange.exchange(Some((flag, data))) {
+                    Ok(Some(tuple)) | Err(Some(tuple)) => {
+                        // exchanged a push, reset this push parameters
+                        flag = tuple.0;
+                        data = tuple.1;
+                    }
+                    Ok(None) | Err(None) => {
+                        // pushed to other popping thread
+                        return;
+                    }
                 }
-                Ok(None) | Err(None) => {
-                    // pushed to other popping thread
-                    return;
-                }
+            } else {
+                backoff.spin();
             }
         }
     }
@@ -270,14 +275,16 @@ impl<T: Default + Copy, A: Alloc + Default> List<T, A> {
             } else {
                 return res;
             }
-            match self.exchange.exchange(None) {
-                Ok(Some(tuple)) | Err(Some(tuple)) => {
-                    // exchanged a push, return it
-                    self.count.fetch_sub(1, Relaxed);
-                    return Some(tuple);
-                }
-                Ok(None) | Err(None) => {
-                    // meet another pop
+            if self.exchange.enabled() {
+                match self.exchange.exchange(None) {
+                    Ok(Some(tuple)) | Err(Some(tuple)) => {
+                        // exchanged a push, return it
+                        self.count.fetch_sub(1, Relaxed);
+                        return Some(tuple);
+                    }
+                    Ok(None) | Err(None) => {
+                        // meet another pop
+                    }
                 }
             }
         }
@@ -579,13 +586,13 @@ pub struct WordList<A: Alloc + Default = Global> {
 }
 
 impl<A: Alloc + Default> WordList<A> {
-    pub fn with_capacity(cap: usize) -> Self {
+    pub fn with_capacity(cap: usize, exchange: bool) -> Self {
         Self {
-            inner: List::new(cap),
+            inner: List::new(cap, exchange),
         }
     }
-    pub fn new() -> Self {
-        Self::with_capacity(512)
+    pub fn new(exchange: bool) -> Self {
+        Self::with_capacity(512, exchange)
     }
     pub fn push(&self, data: usize) {
         debug_assert_ne!(data, 0);
@@ -623,13 +630,13 @@ pub struct ObjectList<T: Default + Copy, A: Alloc + Default = Global> {
 }
 
 impl<T: Default + Copy, A: Alloc + Default> ObjectList<T, A> {
-    pub fn with_capacity(cap: usize) -> Self {
+    pub fn with_capacity(cap: usize, exchange: bool) -> Self {
         Self {
-            inner: List::new(cap),
+            inner: List::new(cap, exchange),
         }
     }
-    pub fn new() -> Self {
-        Self::with_capacity(512)
+    pub fn new(exchange: bool) -> Self {
+        Self::with_capacity(512, exchange)
     }
     pub fn push(&self, data: T) {
         self.inner.push(!0, data)
@@ -812,6 +819,10 @@ impl<T: Default + Copy, A: Alloc + Default> ExchangeArray<T, A> {
 
     pub fn worth_exchange(&self, rc: usize) -> bool {
         rc >= self.slots.capacity()
+    }
+
+    pub fn enabled(&self) -> bool {
+        self.capacity > 0
     }
 }
 

@@ -103,13 +103,13 @@ impl EvMap {
     #[inline]
     pub fn contains(&self, key: usize) -> bool {
         self.map.contains(key)
-    }
+    } 
 }
 
 impl EvBin {
     pub fn new() -> Self {
         Self {
-            list: lflist::ObjectList::with_capacity(8), // fit into 2 cache lines
+            list: lflist::ObjectList::with_capacity(8, false), // fit into 2 cache lines
         }
     }
 

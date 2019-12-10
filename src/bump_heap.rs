@@ -174,7 +174,7 @@ impl<A: Alloc + Default> SizeClass<A> {
     pub fn new(size: usize) -> Self {
         Self {
             size,
-            free_list: lflist::WordList::new(),
+            free_list: lflist::WordList::new(true),
         }
     }
 }
