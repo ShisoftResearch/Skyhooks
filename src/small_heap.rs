@@ -56,7 +56,7 @@ struct NodeMeta {
     size_class_list: TSizeClasses,
     bump_allocator: bump_heap::AllocatorInstance<BumpAllocator>,
     pending_free: lflist::WordList<BumpAllocator>,
-    objects: lfmap::WordMap<BumpAllocator>,
+    objects: lfmap::WordMap<BumpAllocator>, // use seahasher here
 }
 
 struct SizeClass {
@@ -76,22 +76,20 @@ pub fn allocate(size: usize) -> Ptr {
     let size_class_index = size_class_index_from_size(size);
     let max_size = *MAXIMUM_SIZE;
     debug_assert!(size <= *MAXIMUM_SIZE);
-    THREAD_META.with(|meta| {
-        let cpu_id = meta.cpu;
-        let cpu_meta = &PER_CPU_META[cpu_id as usize];
-        // allocate memory from per-CPU size class list
-        let superblock = &cpu_meta.size_class_list[size_class_index];
-        let (addr, block) = superblock.allocate();
-        debug_assert_eq!(superblock.numa, meta.numa);
-        debug_assert_eq!(unsafe { &*(block as *const SuperBlock) }.numa, meta.numa);
-        if cfg!(debug_assertions) {
-            debug_check_cache_aligned(addr, size, 8);
-            debug_check_cache_aligned(addr, size, 16);
-            debug_check_cache_aligned(addr, size, 32);
-            debug_check_cache_aligned(addr, size, CACHE_LINE_SIZE);
-        }
-        return addr as Ptr;
-    })
+    let (cpu, numa) = THREAD_META.with(|meta| (meta.cpu, meta.numa));
+    let cpu_meta = &PER_CPU_META[cpu as usize];
+    // allocate memory from per-CPU size class list
+    let superblock = &cpu_meta.size_class_list[size_class_index];
+    let (addr, block) = superblock.allocate();
+    debug_assert_eq!(superblock.numa, numa);
+    debug_assert_eq!(unsafe { &*(block as *const SuperBlock) }.numa, numa);
+    if cfg!(debug_assertions) {
+        debug_check_cache_aligned(addr, size, 8);
+        debug_check_cache_aligned(addr, size, 16);
+        debug_check_cache_aligned(addr, size, 32);
+        debug_check_cache_aligned(addr, size, CACHE_LINE_SIZE);
+    }
+    return addr as Ptr;
 }
 
 pub fn free(ptr: Ptr) -> bool {
