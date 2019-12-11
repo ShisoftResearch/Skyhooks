@@ -265,7 +265,7 @@ impl<T: Sync> Deref for LazyWrapper<T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        self.inner.get_or_create(|| (self.init)())
+        self.inner.get().unwrap_or_else(|| self.inner.get_or_create(|| (self.init)()))
     }
 }
 

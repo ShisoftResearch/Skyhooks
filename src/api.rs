@@ -35,15 +35,12 @@ pub unsafe fn nu_free(ptr: Ptr) {
     if ptr == null_mut() {
         return;
     }
-    INNER_CALL.with(|is_inner| {
-        if !is_inner.get() {
-            is_inner.set(true);
-            generic_heap::free(ptr);
-            is_inner.set(false);
-        } else {
-            bump_heap::free(ptr);
-        }
-    })
+    let is_inner = INNER_CALL.with(|is_inner| is_inner.get());
+    if !is_inner {
+        generic_heap::free(ptr);
+    } else {
+        bump_heap::free(ptr);
+    }
 }
 
 pub unsafe fn nu_calloc(nmemb: Size, size: Size) -> Ptr {
