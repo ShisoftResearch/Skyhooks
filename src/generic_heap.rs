@@ -16,8 +16,10 @@ pub struct ObjectMeta {
 pub unsafe fn malloc(size: Size) -> Ptr {
     let max_small_size = *small_heap::MAXIMUM_SIZE;
     if size > max_small_size {
+        utils::log("LARGE MALLOC", size);
         large_heap::allocate(size)
     } else {
+        utils::log("SMALL MALLOC", size);
         small_heap::allocate(size)
     }
 }
@@ -29,8 +31,10 @@ pub unsafe fn malloc(size: Size) -> Ptr {
 
 #[cfg(not(feature = "bump_heap_only"))]
 pub unsafe fn free(ptr: Ptr) {
-    if !small_heap::free(ptr) {
-    } else if !large_heap::free(ptr) {
+    if small_heap::free(ptr) {
+        utils::log("SMALL FREE", ptr as usize);
+    } else if large_heap::free(ptr) {
+        utils::log("LARGE FREE", ptr as usize);
     } else {
         panic!("Cannot find object to free at {:x?}", ptr as usize);
     }

@@ -16,6 +16,10 @@ use std::fs::read_dir;
 use std::hash::Hasher;
 use std::ops::Deref;
 use smallvec::SmallVec;
+use std::fs::File;
+use std::sync::Mutex;
+use std::io::Write;
+use std::{process, env};
 
 pub const CACHE_LINE_SIZE: usize = 64;
 pub type CacheLineType = (usize, usize, usize, usize, usize, usize, usize, usize);
@@ -32,6 +36,8 @@ lazy_static! {
     pub static ref NUM_NUMA_NODES: u16 = num_numa_nodes();
     pub static ref NUM_CPU: u16 = unsafe { libc::sysconf(libc::_SC_NPROCESSORS_ONLN) as u16 };
     pub static ref SYS_TOTAL_MEM: usize = total_memory();
+    pub static ref LOG_FILE: Mutex<File> = Mutex::new(
+        File::create(&format!("skyhooks.{}.log", process::id())).unwrap());
 }
 
 // Address hasher for cache locality
@@ -244,6 +250,12 @@ pub fn upper_power_of_2(mut v: usize) -> usize {
     v |= v >> 16;
     v += 1;
     return v;
+}
+
+pub fn log(action: &'static str, size: usize) {
+    if cfg!(debug_assertions) && env::var("LOG") == Ok(String::from("1")) {
+        LOG_FILE.lock().unwrap().write_all(format!("{}, {} \n", action, size).as_bytes());
+    }
 }
 
 #[repr(align(4096))]

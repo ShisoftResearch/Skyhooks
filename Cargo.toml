@@ -11,7 +11,7 @@ crate-type = ["dylib", "rlib", "staticlib"]
 
 [dependencies]
 libc = "*"
-log = { version = "0.4.8" }
+log = { version = "*" }
 lazy_static = { version = "*" }
 num_cpus = "1.0"
 lfmap = { git = "https://github.com/shisoft/lfmap.rs", branch = "develop" }

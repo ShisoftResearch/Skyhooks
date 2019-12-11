@@ -1,6 +1,6 @@
 use crate::mmap_heap::*;
 use crate::utils::*;
-use crate::{bump_heap, generic_heap, Ptr, Size, NULL_PTR};
+use crate::{bump_heap, generic_heap, Ptr, Size, NULL_PTR, utils};
 use core::alloc::{GlobalAlloc, Layout};
 use core::cell::Cell;
 use lfmap::{Map, WordMap};
@@ -27,6 +27,7 @@ pub unsafe fn nu_malloc(size: Size) -> Ptr {
             is_inner.set(false);
             res
         } else {
+            utils::log("BUMP MALLOC", size);
             bump_heap::malloc(size)
         }
     })
@@ -39,6 +40,7 @@ pub unsafe fn nu_free(ptr: Ptr) {
     if !is_inner {
         generic_heap::free(ptr);
     } else {
+        utils::log("BUMP FREE", ptr as usize);
         bump_heap::free(ptr);
     }
 }
