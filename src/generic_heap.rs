@@ -36,7 +36,7 @@ pub unsafe fn free(ptr: Ptr) {
     } else if large_heap::free(ptr) {
         utils::log("LARGE FREE", ptr as usize);
     } else {
-        panic!("Cannot find object to free at {:x?}", ptr as usize);
+        warn!("Cannot find object to free at {:x?}", ptr as usize);
     }
 }
 
