@@ -56,7 +56,7 @@ struct NodeMeta {
     size_class_list: TSizeClasses,
     bump_allocator: bump_heap::AllocatorInstance<BumpAllocator>,
     pending_free: lflist::WordList<BumpAllocator>,
-    objects: lfmap::WordMap<BumpAllocator>, // use seahasher here
+    objects: lfmap::WordMap<BumpAllocator, AddressHasher>,
 }
 
 struct SizeClass {
